@@ -1,0 +1,4 @@
+__pycache__/
+*.py[cod]
+*.ppm
+scenes-preview.png
