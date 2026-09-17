@@ -11,6 +11,7 @@ Run it on the Pi framebuffer (Ctrl-C restores the previous screen):
 from __future__ import annotations
 
 import argparse
+import gc
 import math
 import mmap
 import os
@@ -21,10 +22,18 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+try:
+    import numpy as np
+except ImportError:  # The original low-resolution renderer still has a fallback.
+    np = None
+
 W, H = 200, 120
 SCENES = ("woodland", "meadow", "pond", "autumn", "winter",
           "christmas", "tornado", "tsunami", "balloons", "sakura")
 SECONDS_PER_SCENE = 720
+ASSET_DIR = Path(__file__).with_name("assets")
+ILLUSTRATED_ASSETS = {name: ASSET_DIR / f"{name}-illustrated.png" for name in SCENES}
+_ILLUSTRATED_CACHE = None
 
 
 def mix(a: tuple[int, int, int], b: tuple[int, int, int], amount: float) -> tuple[int, int, int]:
@@ -72,6 +81,128 @@ class Canvas:
             for x in range(cx - radius, cx + radius + 1):
                 if (x - cx) ** 2 + (y - cy) ** 2 <= radius ** 2:
                     self.pixel(x, y, color)
+
+
+def illustrated_variants(theme):
+    """Keep a lighting atlas only for the current scene to bound memory use."""
+    global _ILLUSTRATED_CACHE
+    if _ILLUSTRATED_CACHE is not None and _ILLUSTRATED_CACHE[0] == theme:
+        return _ILLUSTRATED_CACHE[1]
+    _ILLUSTRATED_CACHE = None
+    gc.collect()
+    try:
+        from PIL import Image, ImageEnhance
+    except ImportError as exc:
+        raise RuntimeError("Detailed landscapes require the python3-pil package") from exc
+    base = Image.open(ILLUSTRATED_ASSETS[theme]).convert("RGB")
+    if base.size != (1920, 1080):
+        raise RuntimeError(f"Expected a 1920x1080 {theme} illustration, got {base.size}")
+    frames = []
+    for step in range(12):
+        phase = step / 12
+        daylight = (1 + math.cos((phase-.25)*2*math.pi)) / 2
+        brightness = .58 + .42*daylight
+        image = ImageEnhance.Brightness(base).enhance(brightness)
+        if phase < .16 or phase > .91:
+            tint, strength = (255, 181, 145), .08
+        elif .43 < phase < .63:
+            tint, strength = (244, 145, 92), .12
+        elif .60 <= phase <= .91:
+            tint, strength = (38, 61, 112), .24
+        else:
+            tint, strength = (255, 255, 255), 0
+        if strength:
+            image = Image.blend(image, Image.new("RGB", image.size, tint), strength)
+        frames.append(image.tobytes())
+    _ILLUSTRATED_CACHE = (theme, tuple(frames))
+    return _ILLUSTRATED_CACHE[1]
+
+
+def draw_glints(c, t, y0, y1, center, near_half, far_half, color, count=42):
+    for n in range(count):
+        y = y0+(n*67+round(t*13))%max(1,y1-y0)
+        progress = (y-y0)/max(1,y1-y0)
+        half = round(far_half+(near_half-far_half)*progress)
+        x = center-half+(n*157+round(t*21))%max(1,half*2)
+        c.line(x,y,min(center+half,x+8+n%24),y,color)
+
+
+def draw_illustrated_motion(c, theme, t, phase):
+    night = .60 < phase < .91
+    water_light = (202,235,232) if not night else (104,137,174)
+    if theme == 'woodland':
+        # The river bends toward the lower-right rather than covering the bank.
+        for n in range(42):
+            y=600+(n*67+round(t*13))%440
+            progress=(y-600)/440
+            left=round(820+650*progress); right=round(1470+450*progress)
+            x=left+(n*157+round(t*21))%max(1,right-left)
+            c.line(x,y,min(right,x+8+n%24),y,water_light)
+    elif theme == 'meadow':
+        draw_glints(c,t,540,850,1120,600,120,water_light,34)
+        for n in range(12):
+            x=(n*179+round(t*(18+n%3)))%1920
+            y=420+(n*83+round(24*math.sin(t+n)))%360
+            col=((242,156,73),(227,121,166),(151,186,225))[n%3]
+            c.circle(x-4,y,4,col); c.circle(x+4,y,4,col); c.pixel(x,y,(48,43,42))
+    elif theme == 'pond':
+        draw_glints(c,t,390,970,960,850,280,water_light,65)
+        for n in range(9):
+            x=250+(n*211+round(t*35))%1450; y=520+(n*97)%390
+            radius=4+(round(t*5)+n)%13
+            c.line(x-radius,y,x+radius,y,(185,224,218))
+    elif theme == 'autumn':
+        for n in range(58):
+            x=round((n*223+t*(22+n%5)+30*math.sin(t+n))%2000)-40
+            y=round((n*131+t*(31+n%4))%1160)-40
+            col=((206,92,48),(235,147,54),(169,64,43))[n%3]
+            c.rect(x,y,5+n%4,3,col)
+    elif theme in ('winter','christmas'):
+        snow=(235,243,247)
+        for n in range(130):
+            x=round((n*277+t*(10+n%5)+18*math.sin(t+n))%1960)-20
+            y=round((n*149+t*(25+n%7))%1120)-20
+            c.circle(x,y,1+n%3,snow)
+    elif theme == 'tornado':
+        center_x=1080+round(80*math.sin(t*.25))
+        for n in range(45):
+            angle=t*3+n*.83; radius=120+(n%8)*38
+            x=round(center_x+radius*math.cos(angle)); y=570+round(radius*.55*math.sin(angle))
+            c.line(x,y,x+12*round(math.cos(angle)),y+7*round(math.sin(angle)),
+                   ((119,87,61),(180,151,104),(76,70,67))[n%3])
+        if 19.5 < t%48 < 19.8:
+            c.line(1550,80,1490,210,(248,236,190)); c.line(1490,210,1530,205,(248,236,190))
+    elif theme == 'tsunami':
+        draw_glints(c,t,690,1030,980,920,520,water_light,60)
+        for n in range(75):
+            x=(n*251+round(t*43))%1920; y=650+(n*79+round(t*19))%410
+            radius=2+(n+round(t*3))%7
+            c.circle(x,y,radius,(226,246,240))
+            c.circle(x,y,max(0,radius-2),(84,170,188))
+    elif theme == 'balloons':
+        for n in range(9):
+            x=(n*307+round(t*11))%1940-10; y=210+(n*59)%260
+            c.line(x-8,y,x,y-4,(62,69,68)); c.line(x,y-4,x+8,y,(62,69,68))
+    elif theme == 'sakura':
+        draw_glints(c,t,610,1050,1010,760,180,water_light,55)
+        petal=(250,188,205) if not night else (148,128,168)
+        for n in range(70):
+            x=round((n*257+t*(13+n%5)+24*math.sin(t*.6+n))%1980)-30
+            y=round((n*137+t*(24+n%4))%1140)-30
+            c.circle(x,y,2+n%3,petal); c.pixel(x+5,y+2,petal)
+    if night and theme in ('woodland','pond','sakura'):
+        for n in range(24):
+            if math.sin(t*2+n)>.15:
+                c.circle(150+(n*347)%1620,610+(n*113)%350,2,(236,226,128))
+
+
+def render_illustrated(theme, t, cycle):
+    phase = (t/cycle)%1
+    frames = illustrated_variants(theme)
+    c = Canvas(1920,1080)
+    c.data[:] = frames[int(phase*len(frames))%len(frames)]
+    draw_illustrated_motion(c,theme,t,phase)
+    return c
 
 
 PALETTES = (
@@ -241,6 +372,8 @@ def sakura_river_bounds(y):
 
 def render(scene: Scene, tick: int = 0, label: bool = True, cycle: float = 120, theme: str = "woodland") -> Canvas:
     t = tick / 12
+    if theme in ILLUSTRATED_ASSETS and ILLUSTRATED_ASSETS[theme].exists():
+        return render_illustrated(theme,t,cycle)
     phase = (t / cycle) % 1
     # Dawn -> blue daylight -> amber sunset -> moonlit blue, with smooth blends.
     day = {"sky_top": (62, 143, 189), "sky_bottom": (186, 223, 205),
@@ -919,6 +1052,18 @@ class Framebuffer:
             raise RuntimeError(f"Framebuffer {self.width}x{self.height} is smaller than {canvas.width}x{canvas.height}.")
         image_w, image_h = canvas.width * scale, canvas.height * scale
         x_pad, y_pad = (self.width - image_w) // 2, (self.height - image_h) // 2
+        if np is not None:
+            source = np.frombuffer(canvas.data, dtype=np.uint8).reshape(
+                canvas.height, canvas.width, 3).astype(np.uint16)
+            packed = ((source[:, :, 0] >> 3) << 11) | ((source[:, :, 1] >> 2) << 5) | (source[:, :, 2] >> 3)
+            if scale > 1:
+                packed = packed.repeat(scale, axis=0).repeat(scale, axis=1)
+            raw = np.zeros(self.size // 2, dtype='<u2')
+            screen = raw.reshape(self.size // self.line_length, self.line_length // 2)
+            top, left = y_pad+self.yoffset, x_pad+self.xoffset
+            screen[top:top+image_h, left:left+image_w] = packed
+            self.map[:] = raw.tobytes()
+            return
         raw = bytearray(self.size)
         for y in range(canvas.height):
             row = bytearray()

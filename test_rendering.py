@@ -47,7 +47,8 @@ class RenderingTests(unittest.TestCase):
 
     def test_sleeping_fox_has_no_transparent_colour_keys(self):
         original = pixel_frame.sprite
-        with patch('pixel_frame.sprite', wraps=original) as draw:
+        with patch.dict(pixel_frame.ILLUSTRATED_ASSETS, {}, clear=True), \
+             patch('pixel_frame.sprite', wraps=original) as draw:
             pixel_frame.render(make_scene(42), 90*12, theme='woodland')
         fox = draw.call_args_list[0]
         keys = set(''.join(fox.args[1])) - {' '}
@@ -72,7 +73,7 @@ class RenderingTests(unittest.TestCase):
         self.assertEqual(len(set(frames)), 5)
         self.assertEqual(frames[0], bytes(render(make_scene(42), 0).data))
         for frame in frames:
-            self.assertEqual(len(frame), 200*120*3)
+            self.assertEqual(len(frame), 1920*1080*3)
         self.assertEqual(phase_at(120, 120), (0, 'DAWN'))
 
     def test_hour_playlist_boundaries_and_repeat(self):
@@ -104,15 +105,22 @@ class RenderingTests(unittest.TestCase):
                 first = render(scene, seconds*12, theme=theme)
                 second = render(scene, (seconds+.5)*12, theme=theme)
                 self.assertNotEqual(first.data, second.data, theme)
-                self.assertEqual(len(first.data), 200*120*3)
+                self.assertEqual(len(first.data), first.width*first.height*3)
                 frames.append(bytes(first.data))
         self.assertEqual(len(set(frames)), 20)
+
+    def test_all_illustrations_use_native_display_resolution(self):
+        for theme in SCENES:
+            frame = render(make_scene(42), 30*12, theme=theme)
+            self.assertEqual((frame.width, frame.height), (1920,1080), theme)
+            self.assertEqual(len(frame.data), 1920*1080*3)
 
     def test_fox_faces_right_while_walking_right(self):
         positions = []
         original = pixel_frame.sprite
         for seconds in (2, 4, 28, 30):
-            with patch('pixel_frame.sprite', wraps=original) as draw:
+            with patch.dict(pixel_frame.ILLUSTRATED_ASSETS, {}, clear=True), \
+                 patch('pixel_frame.sprite', wraps=original) as draw:
                 render(make_scene(42), seconds*12)
                 fox = draw.call_args_list[0]
                 self.assertTrue(fox.kwargs['flip'])

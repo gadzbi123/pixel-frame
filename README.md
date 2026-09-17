@@ -1,15 +1,27 @@
 # Woodland frame
 
+## Detailed illustrated landscapes
+
+All ten scenes now use hand-painted 1920×1080 illustrations rather than the
+original 200×120 pixel renderer. They retain the accelerated day/night lighting
+cycle and add scene-specific motion: water highlights, butterflies, ripples,
+leaves, snow, swirling debris, sea foam, birds, petals, and fireflies.
+
+Native illustrations are in `assets/<scene>-illustrated.png`; their generated
+sources are preserved beside them as `*-illustrated-source.png`. Pillow prepares
+the lighting variants, and NumPy keeps native-resolution framebuffer conversion
+fast enough for the 4 FPS service.
+
 The display now runs automatically through the user service `pixel-frame`.
 The service uses the Pi's existing passwordless sudo access to control the
 active Linux console. On launch it saves the cursor position, moves to the
 top-left, and hides the blinking cursor. Stopping restores the saved position
 and shows the cursor again, including normal service stops and Ctrl-C.
 Saving `pixel_frame.py` triggers a syntax check and automatic restart on the
-same framebuffer. A restart begins the playlist again at the pond. The service
+same framebuffer. A restart begins the playlist again at woodland. The service
 starts after reboot without logging in. To stop it, run
-`systemctl --user stop pixel-frame`; to start it, run
-`systemctl --user start pixel-frame`.
+`pixel-frame stop`; to start it, run `pixel-frame start`. Use `pixel-frame run`
+to run in the current TTY so Ctrl-C directly stops it and restores the cursor.
 
 Weather cycles through clear skies, rain, fog, distant lightning, and clearing
 mist; winter precipitation is snow. Ducks dabble, frogs catch flies, foxes sleep,
@@ -24,20 +36,19 @@ boat, helicopter, buoys, birds and animated foam in the tsunami. The sakura
 bridge is fixed across a perspective river, with irises, ferns, koi and a crane.
 The balloon scene stays deliberately calm and uncluttered.
 
-An animated woodland for a Linux text console. No desktop, touchscreen, Python packages, or network connection needed. Foxes visit and pause, rabbits hop and blink, birds flap across the sky, trees and grass sway, clouds drift, smoke rises, and water ripples. A two-minute dawn/day/dusk/night cycle brings out stars and fireflies.
+An illustrated landscape collection for a Linux framebuffer. No desktop or touchscreen is needed. A two-minute dawn/day/dusk/night cycle brings out stars and fireflies.
 
-Run pixel art directly on the display from your TTY (the default):
+Run directly on the display from your TTY:
 
 ```bash
-cd /home/gadzbi/pixel-frame
-sudo python3 pixel_frame.py
+pixel-frame run
 ```
 
 No desktop is needed. **Ctrl-C** quits and restores the previous screen. `--framebuffer` is also accepted explicitly.
 
-The 200×120 scene scales to exactly 800×480 with crisp 4× pixels; other framebuffer sizes are centered using integer scaling. Requires an RGB565 (16-bit) Linux framebuffer. Reads visible resolution, offsets, and stride from the selected device; unsupported color formats produce an error. Ctrl-C restores the saved framebuffer. The program does not change display resolution or console blanking settings. The framebuffer on the development machine currently reports 1920×1080; physical 800×480 hardware still needs an on-device check.
+Every illustration matches the detected 1920×1080 framebuffer. The renderer requires an RGB565 (16-bit) Linux framebuffer and reads its visible resolution, offsets, and stride. Ctrl-C in foreground mode restores the saved framebuffer and cursor.
 
-The default pixel-art playlist repeats every **two hours**, with **12 minutes per scene**:
+The default illustrated playlist repeats every **two hours**, with **12 minutes per scene**:
 
 | Minutes | Scene | Distinct animation |
 | --- | --- | --- |
@@ -86,4 +97,4 @@ Run rendering checks:
 python3 -m unittest -v
 ```
 
-The ten-scene playlist is for pixel output. An optional ASCII version is available with `python3 pixel_frame.py --tty`. In that mode, Q / Esc quits, Space pauses, and N advances a quarter-day. It uses standard console colors and needs at least 40×18 characters.
+The ten-scene playlist is for framebuffer output. An optional ASCII version is available with `python3 pixel_frame.py --tty`. In that mode, Q / Esc quits, Space pauses, and N advances a quarter-day. It uses standard console colors and needs at least 40×18 characters.
