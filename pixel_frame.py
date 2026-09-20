@@ -155,6 +155,12 @@ def load_animated_asset(theme):
         animation.close()
         entry = [tuple(decoded), duration, {}, set()]
         with _ANIMATED_LOCK:
+            keep = {theme}
+            if _ACTIVE_ANIMATED_THEME is not None:
+                keep.add(_ACTIVE_ANIMATED_THEME)
+            for cached_theme in tuple(_ANIMATED_CACHE):
+                if cached_theme not in keep:
+                    del _ANIMATED_CACHE[cached_theme]
             _ANIMATED_CACHE[theme] = entry
         return entry
     finally:

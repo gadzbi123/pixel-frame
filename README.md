@@ -19,6 +19,24 @@ four-keyframe sheets remain in `assets/`, and woodland also includes a shareable
 GIF. Day/night lighting phases and the next scene are prepared in the background
 so lighting and playlist changes do not pause the display.
 
+The current WebP loops have 48 frames over six seconds. The encoder aligns
+stationary landmarks to the first keyframe and uses bidirectional optical flow
+to derive motion guides. A single painted image is warped along a continuous,
+periodic motion path, including the last-to-first transition. Unreliable motion
+is suppressed; objects retain their appearance without cross-fading into other
+poses. This reduces camera jumps and doubled silhouettes.
+Generated poses can still contain inconsistencies; interpolation cannot supply
+the missing detail of a fully animated source video. The older woodland GIF is
+retained as a historical export; the display uses the rebuilt WebPs.
+
+Rebuild a loop with build-only OpenCV dependencies (the player needs no OpenCV):
+
+```bash
+python3 -m venv --system-site-packages .venv-animation
+.venv-animation/bin/pip install opencv-python-headless
+.venv-animation/bin/python build_animated_asset.py woodland
+```
+
 The display now runs automatically through the user service `pixel-frame`.
 The service uses the Pi's existing passwordless sudo access to control the
 active Linux console. On launch it saves the cursor position, moves to the
