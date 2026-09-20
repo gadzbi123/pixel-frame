@@ -10,7 +10,14 @@ leaves, snow, swirling debris, sea foam, birds, petals, and fireflies.
 Native illustrations are in `assets/<scene>-illustrated.png`; their generated
 sources are preserved beside them as `*-illustrated-source.png`. Pillow prepares
 the lighting variants, and NumPy keeps native-resolution framebuffer conversion
-fast enough for the 4 FPS service.
+fast enough for the 8 FPS service.
+
+All ten scenes use seamless 1920×1080 animated WebP loops at 8 FPS. Water,
+weather, smoke, foliage, animals, and scene-specific landmarks move within the
+painted artwork rather than relying only on foreground particles. The original
+four-keyframe sheets remain in `assets/`, and woodland also includes a shareable
+GIF. Day/night lighting phases and the next scene are prepared in the background
+so lighting and playlist changes do not pause the display.
 
 The display now runs automatically through the user service `pixel-frame`.
 The service uses the Pi's existing passwordless sudo access to control the

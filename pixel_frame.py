@@ -18,6 +18,7 @@ import os
 import random
 import signal
 import struct
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,7 +34,16 @@ SCENES = ("woodland", "meadow", "pond", "autumn", "winter",
 SECONDS_PER_SCENE = 720
 ASSET_DIR = Path(__file__).with_name("assets")
 ILLUSTRATED_ASSETS = {name: ASSET_DIR / f"{name}-illustrated.png" for name in SCENES}
+# The GIF is kept as the requested shareable asset.  The equivalent WebP is
+# used on the Pi because it is much smaller and faster to decode.
+ANIMATED_ASSETS = {name: ASSET_DIR / f"{name}-animated.webp" for name in SCENES}
+ANIMATED_FRAME_MS = {name: 125 for name in SCENES}
 _ILLUSTRATED_CACHE = None
+_ANIMATED_CACHE = {}
+_ANIMATED_LOADING = set()
+_ANIMATED_LOCK = threading.Lock()
+_ACTIVE_ANIMATED_THEME = None
+_LIGHTING_LUTS = {}
 
 
 def mix(a: tuple[int, int, int], b: tuple[int, int, int], amount: float) -> tuple[int, int, int]:
@@ -118,6 +128,156 @@ def illustrated_variants(theme):
     return _ILLUSTRATED_CACHE[1]
 
 
+def load_animated_asset(theme):
+    """Decode one animation once; scenes are preloaded before their playlist slot."""
+    try:
+        from PIL import Image
+    except ImportError as exc:
+        raise RuntimeError("Animated landscapes require the python3-pil package") from exc
+    with _ANIMATED_LOCK:
+        if theme in _ANIMATED_CACHE:
+            return _ANIMATED_CACHE[theme]
+        if theme in _ANIMATED_LOADING:
+            return None
+        _ANIMATED_LOADING.add(theme)
+    try:
+        path = ANIMATED_ASSETS[theme]
+        animation = Image.open(path)
+        duration = ANIMATED_FRAME_MS.get(theme) or animation.info.get("duration") or 125
+        decoded = []
+        for index in range(animation.n_frames):
+            animation.seek(index)
+            frame = animation.convert("RGB")
+            if frame.size != (1920, 1080):
+                resampling = getattr(Image, "Resampling", Image)
+                frame = frame.resize((1920, 1080), resampling.LANCZOS)
+            decoded.append(frame.tobytes())
+        animation.close()
+        entry = [tuple(decoded), duration, {}, set()]
+        with _ANIMATED_LOCK:
+            _ANIMATED_CACHE[theme] = entry
+        return entry
+    finally:
+        with _ANIMATED_LOCK:
+            _ANIMATED_LOADING.discard(theme)
+
+
+def animation_lighting_lut(light_step):
+    lut = _LIGHTING_LUTS.get(light_step)
+    if lut is not None:
+        return lut
+    lighting_phase = light_step/12
+    daylight = (1 + math.cos((lighting_phase-.25)*2*math.pi)) / 2
+    brightness = .58 + .42*daylight
+    if lighting_phase < .16 or lighting_phase > .91:
+        tint, strength = (255, 181, 145), .08
+    elif .43 < lighting_phase < .63:
+        tint, strength = (244, 145, 92), .12
+    elif .60 <= lighting_phase <= .91:
+        tint, strength = (38, 61, 112), .24
+    else:
+        tint, strength = (255, 255, 255), 0
+    values = np.arange(256, dtype=np.float32)
+    bright = np.clip(values*brightness, 0, 255)
+    lut = np.empty((3, 256), dtype=np.uint8)
+    for channel in range(3):
+        lut[channel] = bright*(1-strength)+tint[channel]*strength
+    _LIGHTING_LUTS[light_step] = lut
+    return lut
+
+
+def compute_lit_loop(theme, light_step):
+    entry = _ANIMATED_CACHE[theme]
+    try:
+        if np is None:
+            from PIL import Image
+            phase = light_step/12
+            lit = tuple(
+                apply_animation_lighting(Image.frombytes("RGB", (1920,1080), raw), phase)
+                for raw in entry[0]
+            )
+        else:
+            lut = animation_lighting_lut(light_step)
+            lit_frames = []
+            for raw in entry[0]:
+                source = np.frombuffer(raw, dtype=np.uint8).reshape(-1,3)
+                result = np.empty_like(source)
+                result[:,0] = lut[0,source[:,0]]
+                result[:,1] = lut[1,source[:,1]]
+                result[:,2] = lut[2,source[:,2]]
+                lit_frames.append(result.tobytes())
+            lit = tuple(lit_frames)
+        with _ANIMATED_LOCK:
+            entry[2][light_step] = lit
+    finally:
+        with _ANIMATED_LOCK:
+            entry[3].discard(light_step)
+
+
+def apply_animation_lighting(image, phase):
+    from PIL import Image, ImageEnhance
+    daylight = (1 + math.cos((phase-.25)*2*math.pi)) / 2
+    brightness = .58 + .42*daylight
+    image = ImageEnhance.Brightness(image).enhance(brightness)
+    if phase < .16 or phase > .91:
+        tint, strength = (255,181,145), .08
+    elif .43 < phase < .63:
+        tint, strength = (244,145,92), .12
+    elif .60 <= phase <= .91:
+        tint, strength = (38,61,112), .24
+    else:
+        tint, strength = (255,255,255), 0
+    if strength:
+        image = Image.blend(image, Image.new("RGB", image.size, tint), strength)
+    return image.tobytes()
+
+
+def request_lit_loop(theme, light_step):
+    entry = _ANIMATED_CACHE[theme]
+    with _ANIMATED_LOCK:
+        if light_step in entry[2] or light_step in entry[3]:
+            return
+        entry[3].add(light_step)
+    threading.Thread(target=compute_lit_loop, args=(theme,light_step), daemon=True).start()
+
+
+def animated_illustration(theme, t, phase):
+    """Return one pre-lit frame from a decoded high-resolution animation."""
+    global _ACTIVE_ANIMATED_THEME
+    entry = _ANIMATED_CACHE.get(theme) or load_animated_asset(theme)
+    # A background preload of this same theme can only occur around a manual
+    # scene jump. Waiting here avoids decoding the asset twice.
+    while entry is None:
+        time.sleep(.01)
+        entry = _ANIMATED_CACHE.get(theme) or load_animated_asset(theme)
+    if _ACTIVE_ANIMATED_THEME != theme:
+        previous = _ANIMATED_CACHE.get(_ACTIVE_ANIMATED_THEME)
+        if previous is not None:
+            previous[2].clear()
+        _ACTIVE_ANIMATED_THEME = theme
+    frames, duration, lit_loops, _ = entry
+    light_step = int(phase*12) % 12
+    request_lit_loop(theme, light_step)
+    while light_step not in lit_loops:
+        time.sleep(.01)
+    next_step = (light_step+1) % 12
+    request_lit_loop(theme, next_step)
+    for cached_step in tuple(lit_loops):
+        if cached_step not in (light_step, next_step):
+            del lit_loops[cached_step]
+    frame_index = int(t*1000/duration) % len(frames)
+    return lit_loops[light_step][frame_index]
+
+
+def preload_animation(theme):
+    if theme in ANIMATED_ASSETS and ANIMATED_ASSETS[theme].exists():
+        def preload():
+            entry = load_animated_asset(theme)
+            if entry is not None:
+                request_lit_loop(theme, 0)
+        threading.Thread(target=preload, daemon=True).start()
+
+
 def draw_glints(c, t, y0, y1, center, near_half, far_half, color, count=42):
     for n in range(count):
         y = y0+(n*67+round(t*13))%max(1,y1-y0)
@@ -198,6 +358,10 @@ def draw_illustrated_motion(c, theme, t, phase):
 
 def render_illustrated(theme, t, cycle):
     phase = (t/cycle)%1
+    if theme in ANIMATED_ASSETS and ANIMATED_ASSETS[theme].exists():
+        c = Canvas(1920,1080)
+        c.data[:] = animated_illustration(theme, t, phase)
+        return c
     frames = illustrated_variants(theme)
     c = Canvas(1920,1080)
     c.data[:] = frames[int(phase*len(frames))%len(frames)]
@@ -1137,10 +1301,16 @@ def run_framebuffer(device: str, seconds_per_scene: int, fps: int, seed=None,
         scene = make_scene(seed)
         scene_started = time.monotonic()
         start_offset = SCENES.index(start_scene) * seconds_per_scene
+        prepared_theme = None
         while running:
             started = time.monotonic()
-            fb.show(render_playlist(scene, start_offset + started-scene_started,
-                                    seconds_per_scene, day_seconds))
+            playlist_time = start_offset + started-scene_started
+            theme, _ = scene_at(playlist_time, seconds_per_scene)
+            fb.show(render_playlist(scene, playlist_time, seconds_per_scene, day_seconds))
+            if theme != prepared_theme:
+                next_theme = SCENES[(SCENES.index(theme)+1) % len(SCENES)]
+                preload_animation(next_theme)
+                prepared_theme = theme
             time.sleep(max(0, 1 / fps-(time.monotonic()-started)))
     finally:
         try:
