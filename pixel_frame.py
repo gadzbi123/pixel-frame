@@ -44,6 +44,7 @@ _ANIMATED_LOADING = set()
 _ANIMATED_LOCK = threading.Lock()
 _ACTIVE_ANIMATED_THEME = None
 _LIGHTING_LUTS = {}
+_FRAMEBUFFER_LIGHTING_LUTS = {}
 
 
 def mix(a: tuple[int, int, int], b: tuple[int, int, int], amount: float) -> tuple[int, int, int]:
@@ -153,7 +154,7 @@ def load_animated_asset(theme):
                 frame = frame.resize((1920, 1080), resampling.LANCZOS)
             decoded.append(frame.tobytes())
         animation.close()
-        entry = [tuple(decoded), duration, {}, set()]
+        entry = [tuple(decoded), duration]
         with _ANIMATED_LOCK:
             keep = {theme}
             if _ACTIVE_ANIMATED_THEME is not None:
@@ -168,21 +169,25 @@ def load_animated_asset(theme):
             _ANIMATED_LOADING.discard(theme)
 
 
+def lighting_parameters(lighting_phase):
+    daylight = (1 + math.cos((lighting_phase-.25)*2*math.pi)) / 2
+    brightness = .58 + .42*daylight
+    dawn_distance = min(lighting_phase, 1-lighting_phase)
+    weights = (.08*math.exp(-(dawn_distance/.10)**2),
+               .12*math.exp(-((lighting_phase-.52)/.10)**2),
+               .24*(1-daylight)**2)
+    strength = sum(weights)
+    colors = ((255,181,145),(244,145,92),(38,61,112))
+    tint = tuple(sum(w*color[c] for w,color in zip(weights,colors))/strength
+                 for c in range(3))
+    return brightness,tint,strength
+
+
 def animation_lighting_lut(light_step):
     lut = _LIGHTING_LUTS.get(light_step)
     if lut is not None:
         return lut
-    lighting_phase = light_step/12
-    daylight = (1 + math.cos((lighting_phase-.25)*2*math.pi)) / 2
-    brightness = .58 + .42*daylight
-    if lighting_phase < .16 or lighting_phase > .91:
-        tint, strength = (255, 181, 145), .08
-    elif .43 < lighting_phase < .63:
-        tint, strength = (244, 145, 92), .12
-    elif .60 <= lighting_phase <= .91:
-        tint, strength = (38, 61, 112), .24
-    else:
-        tint, strength = (255, 255, 255), 0
+    brightness,tint,strength = lighting_parameters(light_step/240)
     values = np.arange(256, dtype=np.float32)
     bright = np.clip(values*brightness, 0, 255)
     lut = np.empty((3, 256), dtype=np.uint8)
@@ -192,63 +197,17 @@ def animation_lighting_lut(light_step):
     return lut
 
 
-def compute_lit_loop(theme, light_step):
-    entry = _ANIMATED_CACHE[theme]
-    try:
-        if np is None:
-            from PIL import Image
-            phase = light_step/12
-            lit = tuple(
-                apply_animation_lighting(Image.frombytes("RGB", (1920,1080), raw), phase)
-                for raw in entry[0]
-            )
-        else:
-            lut = animation_lighting_lut(light_step)
-            lit_frames = []
-            for raw in entry[0]:
-                source = np.frombuffer(raw, dtype=np.uint8).reshape(-1,3)
-                result = np.empty_like(source)
-                result[:,0] = lut[0,source[:,0]]
-                result[:,1] = lut[1,source[:,1]]
-                result[:,2] = lut[2,source[:,2]]
-                lit_frames.append(result.tobytes())
-            lit = tuple(lit_frames)
-        with _ANIMATED_LOCK:
-            entry[2][light_step] = lit
-    finally:
-        with _ANIMATED_LOCK:
-            entry[3].discard(light_step)
-
-
 def apply_animation_lighting(image, phase):
     from PIL import Image, ImageEnhance
-    daylight = (1 + math.cos((phase-.25)*2*math.pi)) / 2
-    brightness = .58 + .42*daylight
+    brightness,tint,strength = lighting_parameters(phase)
     image = ImageEnhance.Brightness(image).enhance(brightness)
-    if phase < .16 or phase > .91:
-        tint, strength = (255,181,145), .08
-    elif .43 < phase < .63:
-        tint, strength = (244,145,92), .12
-    elif .60 <= phase <= .91:
-        tint, strength = (38,61,112), .24
-    else:
-        tint, strength = (255,255,255), 0
     if strength:
-        image = Image.blend(image, Image.new("RGB", image.size, tint), strength)
+        image = Image.blend(image, Image.new("RGB", image.size, tuple(round(c) for c in tint)), strength)
     return image.tobytes()
 
 
-def request_lit_loop(theme, light_step):
-    entry = _ANIMATED_CACHE[theme]
-    with _ANIMATED_LOCK:
-        if light_step in entry[2] or light_step in entry[3]:
-            return
-        entry[3].add(light_step)
-    threading.Thread(target=compute_lit_loop, args=(theme,light_step), daemon=True).start()
-
-
-def animated_illustration(theme, t, phase):
-    """Return one pre-lit frame from a decoded high-resolution animation."""
+def animated_frame(theme,t):
+    """Select an unlit decoded frame for either export or framebuffer output."""
     global _ACTIVE_ANIMATED_THEME
     entry = _ANIMATED_CACHE.get(theme) or load_animated_asset(theme)
     # A background preload of this same theme can only occur around a manual
@@ -257,30 +216,33 @@ def animated_illustration(theme, t, phase):
         time.sleep(.01)
         entry = _ANIMATED_CACHE.get(theme) or load_animated_asset(theme)
     if _ACTIVE_ANIMATED_THEME != theme:
-        previous = _ANIMATED_CACHE.get(_ACTIVE_ANIMATED_THEME)
-        if previous is not None:
-            previous[2].clear()
         _ACTIVE_ANIMATED_THEME = theme
-    frames, duration, lit_loops, _ = entry
-    light_step = int(phase*12) % 12
-    request_lit_loop(theme, light_step)
-    while light_step not in lit_loops:
-        time.sleep(.01)
-    next_step = (light_step+1) % 12
-    request_lit_loop(theme, next_step)
-    for cached_step in tuple(lit_loops):
-        if cached_step not in (light_step, next_step):
-            del lit_loops[cached_step]
+    frames, duration = entry
     frame_index = int(t*1000/duration) % len(frames)
-    return lit_loops[light_step][frame_index]
+    return frames[frame_index]
+
+
+def animated_illustration(theme, t, phase):
+    """Light the current frame of a decoded high-resolution animation."""
+    raw = animated_frame(theme,t)
+    # Light only the displayed frame. Preparing entire lit loops caused CPU
+    # bursts, and twelve lighting bands produced visible brightness jumps.
+    light_step = int(phase*240) % 240
+    if np is None:
+        from PIL import Image
+        return apply_animation_lighting(Image.frombytes('RGB',(1920,1080),raw),phase)
+    lut = animation_lighting_lut(light_step)
+    source = np.frombuffer(raw,dtype=np.uint8).reshape(-1,3)
+    result = np.empty_like(source)
+    for channel in range(3):
+        result[:,channel] = lut[channel,source[:,channel]]
+    return result.tobytes()
 
 
 def preload_animation(theme):
     if theme in ANIMATED_ASSETS and ANIMATED_ASSETS[theme].exists():
         def preload():
-            entry = load_animated_asset(theme)
-            if entry is not None:
-                request_lit_loop(theme, 0)
+            load_animated_asset(theme)
         threading.Thread(target=preload, daemon=True).start()
 
 
@@ -1226,13 +1188,7 @@ class Framebuffer:
             source = np.frombuffer(canvas.data, dtype=np.uint8).reshape(
                 canvas.height, canvas.width, 3).astype(np.uint16)
             packed = ((source[:, :, 0] >> 3) << 11) | ((source[:, :, 1] >> 2) << 5) | (source[:, :, 2] >> 3)
-            if scale > 1:
-                packed = packed.repeat(scale, axis=0).repeat(scale, axis=1)
-            raw = np.zeros(self.size // 2, dtype='<u2')
-            screen = raw.reshape(self.size // self.line_length, self.line_length // 2)
-            top, left = y_pad+self.yoffset, x_pad+self.xoffset
-            screen[top:top+image_h, left:left+image_w] = packed
-            self.map[:] = raw.tobytes()
+            self.show_packed(packed)
             return
         raw = bytearray(self.size)
         for y in range(canvas.height):
@@ -1256,6 +1212,39 @@ class Framebuffer:
                 start = (yy+self.yoffset) * self.line_length + (x_pad+self.xoffset) * 2
                 raw[start : start + len(expanded)] = expanded
         self.map[:] = raw
+
+    def show_packed(self, packed):
+        """Write RGB565 directly, avoiding an extra full-screen RGB copy."""
+        height,width=packed.shape
+        scale=min(self.width//width,self.height//height)
+        if scale<1:
+            raise RuntimeError(f'Framebuffer {self.width}x{self.height} is smaller than {width}x{height}.')
+        if scale>1:
+            packed=packed.repeat(scale,axis=0).repeat(scale,axis=1)
+        height,width=packed.shape
+        if (width,height)==(self.width,self.height) and self.xoffset==self.yoffset==0 and self.line_length==width*2:
+            self.map[:]=packed.astype('<u2',copy=False).tobytes()
+            return
+        raw=np.zeros(self.size//2,dtype='<u2')
+        screen=raw.reshape(self.size//self.line_length,self.line_length//2)
+        top=(self.height-height)//2+self.yoffset
+        left=(self.width-width)//2+self.xoffset
+        screen[top:top+height,left:left+width]=packed
+        self.map[:]=raw.tobytes()
+
+    def show_animation(self,theme,seconds,phase):
+        """Combine lighting and RGB565 conversion in a single palette lookup."""
+        step=int(phase*240)%240
+        lut=_FRAMEBUFFER_LIGHTING_LUTS.get(step)
+        if lut is None:
+            rgb=animation_lighting_lut(step).astype(np.uint16)
+            lut=np.array(((rgb[0]>>3)<<11,(rgb[1]>>2)<<5,rgb[2]>>3),dtype=np.uint16)
+            _FRAMEBUFFER_LIGHTING_LUTS[step]=lut
+        source=np.frombuffer(animated_frame(theme,seconds),dtype=np.uint8).reshape(1080,1920,3)
+        packed=lut[0,source[:,:,0]]
+        packed |= lut[1,source[:,:,1]]
+        packed |= lut[2,source[:,:,2]]
+        self.show_packed(packed)
 
     def close(self) -> None:
         self.map[:] = self.original
@@ -1302,6 +1291,8 @@ def run_framebuffer(device: str, seconds_per_scene: int, fps: int, seed=None,
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
     try:
+        if ANIMATED_ASSETS[start_scene].exists():
+            load_animated_asset(start_scene)
         cursor.hide()
         fb = Framebuffer(device)
         scene = make_scene(seed)
@@ -1311,8 +1302,11 @@ def run_framebuffer(device: str, seconds_per_scene: int, fps: int, seed=None,
         while running:
             started = time.monotonic()
             playlist_time = start_offset + started-scene_started
-            theme, _ = scene_at(playlist_time, seconds_per_scene)
-            fb.show(render_playlist(scene, playlist_time, seconds_per_scene, day_seconds))
+            theme, local_time = scene_at(playlist_time, seconds_per_scene)
+            if np is not None and ANIMATED_ASSETS[theme].exists():
+                fb.show_animation(theme,local_time,(local_time/day_seconds)%1)
+            else:
+                fb.show(render_playlist(scene, playlist_time, seconds_per_scene, day_seconds))
             if theme != prepared_theme:
                 next_theme = SCENES[(SCENES.index(theme)+1) % len(SCENES)]
                 preload_animation(next_theme)
@@ -1337,8 +1331,8 @@ def main() -> None:
     parser.add_argument("--scene", choices=SCENES, help="habitat for a still export; otherwise --time selects from the playlist")
     parser.add_argument("--start-scene", choices=SCENES, default="woodland",
                         help="first habitat to show in the looping framebuffer playlist")
-    parser.add_argument("--fps", type=int, default=6,
-                        help="frames per second (default: 6; 12 is available for smoother motion)")
+    parser.add_argument("--fps", type=int, default=8,
+                        help="frames per second (default: 8, matching the animation assets)")
     parser.add_argument("--tty", action="store_true", help="optional animated ASCII woodland")
     parser.add_argument("--time", type=float, default=0, help="preview time in seconds")
     args = parser.parse_args()

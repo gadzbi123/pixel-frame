@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+
+command=${1:-}
+case "$command" in
+  start|stop|restart|status)
+    if systemctl --user cat pixel-frame.service >/dev/null 2>&1; then
+      exec systemctl --user "$command" pixel-frame.service
+    fi
+    exec sudo systemctl "$command" pixel-frame.service
+    ;;
+  run)
+    shift
+    script_dir=$(CDPATH= cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd)
+    exec sudo /usr/bin/python3 "$script_dir/pixel_frame.py" --framebuffer "$@"
+    ;;
+  *)
+    echo "Usage: pixel-frame {start|stop|restart|status|run}" >&2
+    exit 2
+    ;;
+esac

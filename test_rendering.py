@@ -6,6 +6,31 @@ from tty_scene import render_text, phase_at
 
 
 class RenderingTests(unittest.TestCase):
+    @unittest.skipIf(pixel_frame.np is None, 'NumPy framebuffer path')
+    def test_direct_animation_output_matches_rgb_rendering(self):
+        raw=bytes((240,70,10,30,170,255))*(1920*1080//2)
+        def framebuffer():
+            fb=Framebuffer.__new__(Framebuffer)
+            fb.width,fb.height=1920,1080
+            fb.line_length=3840;fb.size=3840*1080
+            fb.xoffset=fb.yoffset=0;fb.map=bytearray(fb.size)
+            return fb
+        with patch('pixel_frame.animated_frame',return_value=raw):
+            for phase in (.0,.25,.72):
+                direct,normal=framebuffer(),framebuffer()
+                direct.show_animation('woodland',0,phase)
+                c=Canvas(1920,1080)
+                c.data[:]=pixel_frame.animated_illustration('woodland',0,phase)
+                normal.show(c)
+                self.assertEqual(direct.map,normal.map)
+
+    @unittest.skipIf(pixel_frame.np is None, 'NumPy lighting path')
+    def test_lighting_changes_gradually_including_day_wrap(self):
+        np=pixel_frame.np
+        luts=[pixel_frame.animation_lighting_lut(n).astype(float) for n in range(240)]
+        for first,second in zip(luts,luts[1:]+luts[:1]):
+            self.assertLessEqual(np.abs(first-second).max(),4)
+
     def test_celestial_resets_are_hidden_below_horizon(self):
         for phase in (0, .0001, .4999, .5, .5001, .9999):
             _, y = pixel_frame.celestial_position(phase)

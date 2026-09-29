@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pixel Frame animation review</title>
+<style>
+body{margin:0;background:#101b20;color:#e5ece6;font:17px system-ui}
+main{max-width:1100px;margin:auto;padding:24px}h1{font-size:24px}
+nav{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:20px 0}
+button,select{font:inherit;padding:9px 14px;border:1px solid #587068;border-radius:8px;background:#263c38;color:inherit}
+img{width:100%;aspect-ratio:16/9;object-fit:contain;border-radius:12px;background:#000}
+p{line-height:1.5;color:#b9ccc3}
+</style>
+<main>
+<h1>Pixel Frame · animation review</h1>
+<p>Ten scenes, six-second loops, 48 frames at 8 FPS. Select a scene to see the motion.</p>
+<nav><button id="previous">← Previous</button><select id="scene" aria-label="Scene"></select><button id="next">Next →</button><button id="pause">Pause</button></nav>
+<img id="animation" alt="">
+<p id="description"></p>
+<p>These are layered animations of painted artwork. Animal movement is subtle; it does not simulate a walking gait. The player adds gradual day/night lighting.</p>
+</main>
+<script>
+const descriptions={
+ woodland:'Water flows through the stream; foliage sways, smoke drifts, and the fox moves subtly.',
+ meadow:'Butterflies drift, flowers sway, and separate lattice blades rotate around a stationary windmill.',
+ pond:'Ducks glide independently across rippling water while reeds sway.',
+ autumn:'Leaves fall and turn; branches sway and the fox moves subtly.',
+ winter:'Snow falls, the river ripples, smoke drifts, and the fox moves subtly.',
+ christmas:'Snow falls over the nativity and village while tree lights sparkle.',
+ tornado:'The funnel swirls while an airborne car and cow move independently.',
+ tsunami:'The wave rolls, the rescue boat bobs, and the helicopter moves with a spinning rotor.',
+ balloons:'Four balloons drift and bob above swaying flowers.',
+ sakura:'Petals fall through swaying blossoms above a flowing river and a fixed bridge.'
+};
+const names=Object.keys(descriptions),selector=document.querySelector('#scene'),img=document.querySelector('#animation');
+let playing=true;
+names.forEach(name=>selector.add(new Option(name[0].toUpperCase()+name.slice(1),name)));
+function show(){const name=selector.value;img.src=playing?`../assets/${name}-animated.webp`:`${name}-poster.jpg`;img.alt=`${name} animation`;document.querySelector('#description').textContent=descriptions[name];document.querySelector('#pause').textContent=playing?'Pause':'Play';}
+selector.onchange=show;
+document.querySelector('#previous').onclick=()=>{selector.selectedIndex=(selector.selectedIndex+names.length-1)%names.length;show();};
+document.querySelector('#next').onclick=()=>{selector.selectedIndex=(selector.selectedIndex+1)%names.length;show();};
+document.querySelector('#pause').onclick=()=>{playing=!playing;show();};
+show();
+</script>
+</html>

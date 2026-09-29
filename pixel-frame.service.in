@@ -1,0 +1,16 @@
+[Unit]
+Description=Pixel Frame framebuffer animation
+After=local-fs.target
+Wants=local-fs.target
+
+[Service]
+Type=simple
+WorkingDirectory=@PROJECT_DIR@
+ExecStart=/usr/bin/python3 @PROJECT_DIR@/pixel_frame.py --framebuffer
+Restart=on-failure
+RestartSec=3
+KillSignal=SIGINT
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

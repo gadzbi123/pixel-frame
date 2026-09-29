@@ -1,0 +1,82 @@
+[
+  {
+    "scene": "woodland",
+    "frames": 48,
+    "duration_ms": 6000,
+    "mean_frame_change": 1.567,
+    "loop_seam_change": 2.026,
+    "maximum_motion": 10.657
+  },
+  {
+    "scene": "meadow",
+    "frames": 48,
+    "duration_ms": 6000,
+    "mean_frame_change": 3.563,
+    "loop_seam_change": 4.232,
+    "maximum_motion": 18.387
+  },
+  {
+    "scene": "pond",
+    "frames": 48,
+    "duration_ms": 6000,
+    "mean_frame_change": 2.852,
+    "loop_seam_change": 3.339,
+    "maximum_motion": 15.873
+  },
+  {
+    "scene": "autumn",
+    "frames": 48,
+    "duration_ms": 6000,
+    "mean_frame_change": 1.046,
+    "loop_seam_change": 1.733,
+    "maximum_motion": 5.868
+  },
+  {
+    "scene": "winter",
+    "frames": 48,
+    "duration_ms": 6000,
+    "mean_frame_change": 1.522,
+    "loop_seam_change": 2.18,
+    "maximum_motion": 8.068
+  },
+  {
+    "scene": "christmas",
+    "frames": 48,
+    "duration_ms": 6000,
+    "mean_frame_change": 0.703,
+    "loop_seam_change": 1.349,
+    "maximum_motion": 1.558
+  },
+  {
+    "scene": "tornado",
+    "frames": 48,
+    "duration_ms": 6000,
+    "mean_frame_change": 1.798,
+    "loop_seam_change": 2.351,
+    "maximum_motion": 5.902
+  },
+  {
+    "scene": "tsunami",
+    "frames": 48,
+    "duration_ms": 6000,
+    "mean_frame_change": 8.179,
+    "loop_seam_change": 8.321,
+    "maximum_motion": 30.61
+  },
+  {
+    "scene": "balloons",
+    "frames": 48,
+    "duration_ms": 6000,
+    "mean_frame_change": 1.685,
+    "loop_seam_change": 2.462,
+    "maximum_motion": 11.145
+  },
+  {
+    "scene": "sakura",
+    "frames": 48,
+    "duration_ms": 6000,
+    "mean_frame_change": 1.708,
+    "loop_seam_change": 2.194,
+    "maximum_motion": 10.008
+  }
+]

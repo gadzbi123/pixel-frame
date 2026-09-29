@@ -4,30 +4,34 @@
 
 All ten scenes now use hand-painted 1920×1080 illustrations rather than the
 original 200×120 pixel renderer. They retain the accelerated day/night lighting
-cycle and add scene-specific motion: water highlights, butterflies, ripples,
-leaves, snow, swirling debris, sea foam, birds, petals, and fireflies.
+cycle and add scene-specific motion: flowing water, drifting butterflies and
+balloons, swimming ducks, rotating blades, foliage, leaves, snow, and petals.
 
 Native illustrations are in `assets/<scene>-illustrated.png`; their generated
-sources are preserved beside them as `*-illustrated-source.png`. Pillow prepares
-the lighting variants, and NumPy keeps native-resolution framebuffer conversion
-fast enough for the 8 FPS service.
+sources are preserved beside them as `*-illustrated-source.png`. Pillow decodes
+the loops; NumPy combines lighting and RGB565 conversion in a single pass for
+the 8 FPS player.
 
 All ten scenes use seamless 1920×1080 animated WebP loops at 8 FPS. Water,
 weather, smoke, foliage, animals, and scene-specific landmarks move within the
 painted artwork rather than relying only on foreground particles. The original
 four-keyframe sheets remain in `assets/`, and woodland also includes a shareable
-GIF. Day/night lighting phases and the next scene are prepared in the background
-so lighting and playlist changes do not pause the display.
+GIF. The next scene is decoded in the background. Lighting is applied only to
+the displayed frame, with gradual brightness changes and no whole-loop lighting jobs.
 
-The current WebP loops have 48 frames over six seconds. The encoder aligns
-stationary landmarks to the first keyframe and uses bidirectional optical flow
-to derive motion guides. A single painted image is warped along a continuous,
-periodic motion path, including the last-to-first transition. Unreliable motion
-is suppressed; objects retain their appearance without cross-fading into other
-poses. This reduces camera jumps and doubled silhouettes.
-Generated poses can still contain inconsistencies; interpolation cannot supply
-the missing detail of a fully animated source video. The older woodland GIF is
-retained as a historical export; the display uses the rebuilt WebPs.
+The loops have 48 frames over six seconds. `scene_motion.py` selects water,
+foliage, smoke, and weather regions for periodic motion with a fixed camera.
+Ducks, balloons, butterflies, airborne objects, the boat, and helicopter move
+as separate foreground layers. Windmill blades and the helicopter rotor rotate
+independently. The meadow uses `meadow-motion-background.png`, a repaired
+painting without blades, so rotating the windmill does not move the tower.
+Foxes and rabbits have subtle local movement rather than a walking gait. These
+are layered animations of painted artwork, not full character animation.
+
+Open `previews/animations.html` to browse the rebuilt loops. Run
+`python3 audit_animations.py` to check frame counts, timing, visible motion, and
+the last-to-first transition. The older woodland GIF remains a historical
+export; the display uses the rebuilt WebPs.
 
 Rebuild a loop with build-only OpenCV dependencies (the player needs no OpenCV):
 
@@ -37,36 +41,16 @@ python3 -m venv --system-site-packages .venv-animation
 .venv-animation/bin/python build_animated_asset.py woodland
 ```
 
-The display now runs automatically through the user service `pixel-frame`.
-The service uses the Pi's existing passwordless sudo access to control the
-active Linux console. On launch it saves the cursor position, moves to the
-top-left, and hides the blinking cursor. Stopping restores the saved position
-and shows the cursor again, including normal service stops and Ctrl-C.
-Saving `pixel_frame.py` triggers a syntax check and automatic restart on the
-same framebuffer. A restart begins the playlist again at woodland. The service
-starts after reboot without logging in. To stop it, run
-`pixel-frame stop`; to start it, run `pixel-frame start`. Use `pixel-frame run`
-to run in the current TTY so Ctrl-C directly stops it and restores the cursor.
+Console auto-login on tty1 is configured independently of the player. Run the
+player in the foreground when you want the display; Ctrl-C restores the screen
+and cursor and returns to your shell.
 
-Weather cycles through clear skies, rain, fog, distant lightning, and clearing
-mist; winter precipitation is snow. Ducks dabble, frogs catch flies, foxes sleep,
-and rabbits hide at night. Occasional shooting stars, boats, deer, and firefly
-gatherings appear. Spring petals, summer berries, fallen autumn leaves, and
-gradually accumulating winter snow follow the existing habitat playlist.
-The accelerated two-minute day/night cycle is unchanged.
-
-The newer scenes include a nativity and changing village activity at Christmas;
-moving cattle, cars, roofs and debris in the tornado; and a lighthouse, rescue
-boat, helicopter, buoys, birds and animated foam in the tsunami. The sakura
-bridge is fixed across a perspective river, with irises, ferns, koi and a crane.
-The balloon scene stays deliberately calm and uncluttered.
-
-An illustrated landscape collection for a Linux framebuffer. No desktop or touchscreen is needed. A two-minute dawn/day/dusk/night cycle brings out stars and fireflies.
+An illustrated landscape collection for a Linux framebuffer. No desktop or touchscreen is needed. A two-minute dawn/day/dusk/night cycle changes the lighting.
 
 Run directly on the display from your TTY:
 
 ```bash
-pixel-frame run
+sudo python3 pixel_frame.py --framebuffer
 ```
 
 No desktop is needed. **Ctrl-C** quits and restores the previous screen. `--framebuffer` is also accepted explicitly.
@@ -77,15 +61,15 @@ The default illustrated playlist repeats every **two hours**, with **12 minutes 
 
 | Minutes | Scene | Distinct animation |
 | --- | --- | --- |
-| 0–12 | Woodland | Fox visits, rabbit hops, cabin smoke |
+| 0–12 | Woodland | Flowing water, foliage, subtle fox movement, cabin smoke |
 | 12–24 | Meadow | Butterflies, flowers, rotating windmill |
-| 24–36 | Pond | Ducks swim and turn, frog hops, reeds sway |
+| 24–36 | Pond | Ducks glide, water ripples, reeds sway |
 | 36–48 | Autumn | Orange tree canopies, drifting leaves, fox |
 | 48–60 | Winter | Falling snow, snow-covered cabin, snowman, fox |
-| 60–72 | Christmas | Snowy village, decorated tree, twinkling lights, presents |
-| 72–84 | Tornado | Rotating funnel, drifting storm clouds, swirling debris |
-| 84–96 | Tsunami | Offshore wave that rises, travels, and subsides |
-| 96–108 | Balloons | Colourful hot-air balloons above a flower meadow |
+| 60–72 | Christmas | Falling snow, sparkling tree lights |
+| 72–84 | Tornado | Swirling funnel, airborne car and cow |
+| 84–96 | Tsunami | Rolling wave, bobbing boat, helicopter with spinning rotor |
+| 96–108 | Balloons | Balloons drift above swaying flowers |
 | 108–120 | Sakura | Cherry blossoms, falling petals, stream and arched bridge |
 
 Each habitat retains the two-minute day/night cycle. After sakura, the playlist starts again automatically.
@@ -106,7 +90,7 @@ sudo python3 pixel_frame.py --start-scene pond
 
 Valid names are `woodland`, `meadow`, `pond`, `autumn`, `winter`, `christmas`, `tornado`, `tsunami`, `balloons`, and `sakura`. The next scenes continue in the usual order and loop after two hours.
 
-The default is 6 FPS to keep CPU use modest on a Pi-class system. Use `--fps 4` for the lightest load or `--fps 12` if you prefer smoother movement and have CPU headroom.
+The default is 8 FPS to match the animation assets. Use `--fps 4` for the lightest load or `--fps 12` if you prefer smoother movement and have CPU headroom.
 
 Export a pixel preview at any point in the cycle:
 

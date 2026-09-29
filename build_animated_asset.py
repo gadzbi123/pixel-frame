@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build an eight-FPS 1080p animated WebP from a four-panel keyframe sheet."""
+"""Build scene-specific eight-FPS 1080p motion from a painted keyframe."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from pathlib import Path
 from PIL import Image
 import cv2
 import numpy as np
+from scene_motion import scene_frames
 
 
 def stabilize(frames):
@@ -94,9 +95,12 @@ def build(theme: str, steps: int = 12) -> Path:
         np.array(sheet.crop(box).resize((960, 540), resampling.LANCZOS))
         for box in boxes
     ]
-    keyframes = stabilize(keyframes)
+    clean_rotor = theme == 'meadow' and (assets/'meadow-motion-background.png').exists()
+    if clean_rotor:
+        keyframes[0] = np.array(Image.open(assets/'meadow-motion-background.png')
+                               .convert('RGB').resize((960,540),resampling.LANCZOS))
     frames = [frame.resize((1920,1080), resampling.LANCZOS)
-              for frame in coherent_frames(keyframes, steps)]
+              for frame in scene_frames(keyframes[0], theme, steps*4, clean_rotor=clean_rotor)]
     temporary = output.with_suffix(".building.webp")
     frames[0].save(
         temporary,

@@ -1,0 +1,4 @@
+Tool: built-in image_gen.imagegen
+Edit target: previews/meadow-first.png (first frame of the original meadow loop)
+
+Use case: precise-object-edit. Edit target: the attached meadow painting. For a layered animation, remove ONLY all four windmill blades/sails, their lattice and the thin spokes from the windmill in the upper-right. Keep the windmill tower and conical roof, and fill in the portions of tower, roof, sky, clouds, and distant forest previously hidden by the blades. The tower has NO blades at all after the edit. Preserve the same exact camera, locations, horizon, flowers, rabbit, butterflies, landscape, proportions, lighting, painterly detailed style, and every unrelated detail. Do not move or resize the windmill tower. Output the exact same full landscape composition, no text or watermark.
