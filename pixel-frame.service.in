@@ -1,15 +1,27 @@
 [Unit]
-Description=Pixel Frame framebuffer animation
-After=local-fs.target
-Wants=local-fs.target
+Description=Pixel Frame on the main display
+# The frame owns the first console. SSH sessions are not involved, and
+# Ctrl+Alt+F2 on the display's keyboard still opens a login prompt.
+Conflicts=getty@tty1.service
+After=getty@tty1.service systemd-user-sessions.service
 
 [Service]
-Type=simple
+User=@USER@
+SupplementaryGroups=video
 WorkingDirectory=@PROJECT_DIR@
-ExecStart=/usr/bin/python3 @PROJECT_DIR@/pixel_frame.py --framebuffer
+# Extra options, e.g. PIXEL_FRAME_ARGS="--quiet-hours 00:00-06:30"
+EnvironmentFile=-/etc/default/pixel-frame
+ExecStart=/usr/bin/python3 @PROJECT_DIR@/pixel_frame.py $PIXEL_FRAME_ARGS
+# Give the console back when the frame is stopped.
+ExecStopPost=-+/usr/bin/systemctl --no-block start getty@tty1.service
+StandardInput=tty-force
+StandardOutput=journal
+StandardError=journal
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
 Restart=on-failure
 RestartSec=3
-KillSignal=SIGINT
 TimeoutStopSec=10
 
 [Install]

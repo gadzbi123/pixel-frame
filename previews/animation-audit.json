@@ -1,82 +1,82 @@
 [
   {
     "scene": "woodland",
-    "frames": 48,
-    "duration_ms": 6000,
-    "mean_frame_change": 1.567,
-    "loop_seam_change": 2.026,
-    "maximum_motion": 10.657
+    "frames": 192,
+    "duration_ms": 24000,
+    "mean_frame_change": 0.655,
+    "loop_seam_change": 1.339,
+    "maximum_motion": 6.468
   },
   {
     "scene": "meadow",
-    "frames": 48,
-    "duration_ms": 6000,
-    "mean_frame_change": 3.563,
-    "loop_seam_change": 4.232,
-    "maximum_motion": 18.387
+    "frames": 192,
+    "duration_ms": 24000,
+    "mean_frame_change": 2.964,
+    "loop_seam_change": 3.844,
+    "maximum_motion": 16.932
   },
   {
     "scene": "pond",
-    "frames": 48,
-    "duration_ms": 6000,
-    "mean_frame_change": 2.852,
-    "loop_seam_change": 3.339,
-    "maximum_motion": 15.873
+    "frames": 192,
+    "duration_ms": 24000,
+    "mean_frame_change": 0.796,
+    "loop_seam_change": 1.501,
+    "maximum_motion": 7.911
   },
   {
     "scene": "autumn",
-    "frames": 48,
-    "duration_ms": 6000,
-    "mean_frame_change": 1.046,
-    "loop_seam_change": 1.733,
-    "maximum_motion": 5.868
+    "frames": 192,
+    "duration_ms": 24000,
+    "mean_frame_change": 0.795,
+    "loop_seam_change": 1.521,
+    "maximum_motion": 5.272
   },
   {
     "scene": "winter",
-    "frames": 48,
-    "duration_ms": 6000,
-    "mean_frame_change": 1.522,
-    "loop_seam_change": 2.18,
-    "maximum_motion": 8.068
+    "frames": 192,
+    "duration_ms": 24000,
+    "mean_frame_change": 0.724,
+    "loop_seam_change": 1.443,
+    "maximum_motion": 5.543
   },
   {
     "scene": "christmas",
-    "frames": 48,
-    "duration_ms": 6000,
-    "mean_frame_change": 0.703,
-    "loop_seam_change": 1.349,
-    "maximum_motion": 1.558
+    "frames": 192,
+    "duration_ms": 24000,
+    "mean_frame_change": 0.377,
+    "loop_seam_change": 0.919,
+    "maximum_motion": 1.016
   },
   {
     "scene": "tornado",
-    "frames": 48,
-    "duration_ms": 6000,
-    "mean_frame_change": 1.798,
-    "loop_seam_change": 2.351,
-    "maximum_motion": 5.902
+    "frames": 192,
+    "duration_ms": 24000,
+    "mean_frame_change": 0.731,
+    "loop_seam_change": 1.283,
+    "maximum_motion": 3.333
   },
   {
     "scene": "tsunami",
-    "frames": 48,
-    "duration_ms": 6000,
-    "mean_frame_change": 8.179,
-    "loop_seam_change": 8.321,
-    "maximum_motion": 30.61
+    "frames": 192,
+    "duration_ms": 24000,
+    "mean_frame_change": 1.19,
+    "loop_seam_change": 1.546,
+    "maximum_motion": 5.212
   },
   {
     "scene": "balloons",
-    "frames": 48,
-    "duration_ms": 6000,
-    "mean_frame_change": 1.685,
-    "loop_seam_change": 2.462,
-    "maximum_motion": 11.145
+    "frames": 192,
+    "duration_ms": 24000,
+    "mean_frame_change": 0.915,
+    "loop_seam_change": 1.613,
+    "maximum_motion": 10.477
   },
   {
     "scene": "sakura",
-    "frames": 48,
-    "duration_ms": 6000,
-    "mean_frame_change": 1.708,
-    "loop_seam_change": 2.194,
-    "maximum_motion": 10.008
+    "frames": 192,
+    "duration_ms": 24000,
+    "mean_frame_change": 1.022,
+    "loop_seam_change": 1.67,
+    "maximum_motion": 8.685
   }
 ]

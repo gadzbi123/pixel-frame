@@ -17,7 +17,8 @@ def audit():
     for row,name in enumerate(SCENES):
         with Image.open(root/'assets'/f'{name}-animated.webp') as animation:
             assert animation.size==(1920,1080),name
-            assert animation.n_frames==48,(name,animation.n_frames)
+            assert animation.n_frames%48==0,(name,animation.n_frames)
+            picks=(0,animation.n_frames//6,animation.n_frames//2)
             assert animation.info.get('loop')==0,name
             frames=[]
             durations=[]
@@ -28,8 +29,8 @@ def audit():
                 frames.append(np.asarray(frame.resize((480,270))).astype(np.float32))
                 if i==0:
                     frame.resize((960,540)).save(preview/f'{name}-poster.jpg',quality=90)
-                if i in (0,8,24):
-                    column=(0,8,24).index(i)
+                if i in picks:
+                    column=picks.index(i)
                     storyboard.paste(frame.resize((320,180)),(column*320,row*202))
             assert set(durations)=={125},(name,durations)
             changes=[float(np.abs(a-b).mean()) for a,b in zip(frames,frames[1:])]

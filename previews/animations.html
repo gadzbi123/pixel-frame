@@ -13,7 +13,7 @@ p{line-height:1.5;color:#b9ccc3}
 </style>
 <main>
 <h1>Pixel Frame · animation review</h1>
-<p>Ten scenes, six-second loops, 48 frames at 8 FPS. Select a scene to see the motion.</p>
+<p>Ten scenes, 24-second loops, 192 frames at 8 FPS. Select a scene to see the motion.</p>
 <nav><button id="previous">← Previous</button><select id="scene" aria-label="Scene"></select><button id="next">Next →</button><button id="pause">Pause</button></nav>
 <img id="animation" alt="">
 <p id="description"></p>
@@ -21,16 +21,16 @@ p{line-height:1.5;color:#b9ccc3}
 </main>
 <script>
 const descriptions={
- woodland:'Water flows through the stream; foliage sways, smoke drifts, and the fox moves subtly.',
+ woodland:'Water gently shimmers in the stream; plants sway and the fox’s head, body, and tail move; rocks stay fixed.',
  meadow:'Butterflies drift, flowers sway, and separate lattice blades rotate around a stationary windmill.',
- pond:'Ducks glide independently across rippling water while reeds sway.',
- autumn:'Leaves fall and turn; branches sway and the fox moves subtly.',
- winter:'Snow falls, the river ripples, smoke drifts, and the fox moves subtly.',
+ pond:'Ducks glide independently across subtly shimmering water while reeds sway.',
+ autumn:'Lobed autumn leaves drift and turn; branches sway and the fox’s head, body, and tail move.',
+ winter:'Snow falls, the river shimmers, smoke drifts, and the fox moves subtly.',
  christmas:'Snow falls over the nativity and village while tree lights sparkle.',
- tornado:'The funnel swirls while an airborne car and cow move independently.',
- tsunami:'The wave rolls, the rescue boat bobs, and the helicopter moves with a spinning rotor.',
+ tornado:'Texture swirls around the funnel’s center while the airborne car and cow drift; ground cows stay fixed.',
+ tsunami:'Foam gently glints, the rescue boat bobs, and the helicopter moves with a spinning rotor.',
  balloons:'Four balloons drift and bob above swaying flowers.',
- sakura:'Petals fall through swaying blossoms above a flowing river and a fixed bridge.'
+ sakura:'Petals fall through swaying blossoms above a gently shimmering river and a fixed bridge.'
 };
 const names=Object.keys(descriptions),selector=document.querySelector('#scene'),img=document.querySelector('#animation');
 let playing=true;

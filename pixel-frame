@@ -1,21 +1,25 @@
 #!/bin/sh
+# Control the picture frame. Only `run` stays in the foreground (until Ctrl-C);
+# every other command returns straight away, so it is safe to use over SSH.
 set -eu
 
-command=${1:-}
-case "$command" in
-  start|stop|restart|status)
-    if systemctl --user cat pixel-frame.service >/dev/null 2>&1; then
-      exec systemctl --user "$command" pixel-frame.service
-    fi
-    exec sudo systemctl "$command" pixel-frame.service
+case "${1:-}" in
+  start|stop|restart)
+    exec systemctl "$1" pixel-frame.service
+    ;;
+  status)
+    exec systemctl --no-pager status pixel-frame.service
+    ;;
+  logs)
+    exec journalctl --no-pager -n 50 -u pixel-frame.service
     ;;
   run)
     shift
     script_dir=$(CDPATH= cd -- "$(dirname -- "$(readlink -f -- "$0")")" && pwd)
-    exec sudo /usr/bin/python3 "$script_dir/pixel_frame.py" --framebuffer "$@"
+    exec /usr/bin/python3 "$script_dir/pixel_frame.py" "$@"
     ;;
   *)
-    echo "Usage: pixel-frame {start|stop|restart|status|run}" >&2
+    echo "Usage: pixel-frame {start|stop|restart|status|logs|run [options]}" >&2
     exit 2
     ;;
 esac
