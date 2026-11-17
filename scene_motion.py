@@ -61,10 +61,19 @@ SUBJECTS = {
 }
 # Light sources that keep glowing at night: (polygon, kind). Inside each region
 # 'warm' keeps lamp-lit yellow and orange pixels; 'bright' keeps near-white light.
+# 'window' is for a region traced around one window: it also keeps the deep
+# orange of curtains, so the pane glows whole. Trace windows closely: sunlit log
+# ends and leaves beside them are just as warm, and against a moonlit wall they
+# would glow like fairy lights.
+def box(left,top,right,bottom):
+    return [(left,top),(right,top),(right,bottom),(left,bottom)]
+
 GLOW = {
-    'woodland': [([(838,250),(952,250),(952,292),(838,292)],'warm')],
-    'winter': [([(735,228),(922,228),(922,302),(735,302)],'warm'),
-               ([(758,388),(802,388),(802,448),(758,448)],'warm')],
+    'woodland': [(box(843,263.5,851.5,281),'window'),(box(853,261.5,866,283.5),'window'),
+                 (box(874.5,263,881.5,284.5),'window'),(box(923.5,262,940.5,281.5),'window')],
+    'winter': [(box(770,234.5,778.5,250.5),'window'),(box(769.5,275.5,787,299.5),'window'),
+               (box(836,276,850.5,298),'window'),(box(899.5,278,915.5,296.5),'window'),
+               (box(758,388,802,448),'warm')],  # the window's reflection in the stream
     'christmas': [([(55,165),(425,195),(425,425),(55,425)],'warm'),
                   ([(110,400),(160,400),(160,485),(110,485)],'warm'),
                   ([(470,225),(740,225),(740,345),(470,345)],'warm'),
@@ -96,7 +105,8 @@ def glow_mask(base, theme):
     near=cv2.dilate(warm,cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(max(3,round(9*scale)),)*2))
     lit=warm|(near&(rgb.min(axis=2)>150)&(r>=b))
     lit=cv2.morphologyEx(lit,cv2.MORPH_CLOSE,np.ones((max(3,round(3*scale)),)*2,np.uint8))
-    kinds={'warm':lit.astype(bool),'bright':rgb.min(axis=2)>215}
+    deep=(r>150)&(r-b>70)&(r>=g)
+    kinds={'warm':lit.astype(bool),'bright':rgb.min(axis=2)>215,'window':lit.astype(bool)|deep}
     mask=np.zeros((height,width),np.uint8)
     for points,kind in GLOW.get(theme,()):
         inside=np.zeros_like(mask)

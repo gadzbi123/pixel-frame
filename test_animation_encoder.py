@@ -101,8 +101,14 @@ class AnimationEncoderTests(unittest.TestCase):
                 allowed=cv2.dilate(marked,np.ones((15,15),np.uint8)).astype(bool)
                 self.assertGreater(mask.sum(),40)
                 self.assertFalse((mask & ~allowed).any())
-                # Only the lamp-lit pixels glow, never a whole marked region.
-                self.assertLess(mask.sum(),marked.sum()/2)
+
+    def test_cabin_walls_beside_the_windows_do_not_glow(self):
+        # Sunlit log ends and leaves, as warm as the windows they sit beside.
+        for name,(left,top,right,bottom) in (('woodland',(883,258,889,284)),('woodland',(944,250,952,282)),
+                                             ('winter',(739,280,746,302)),('winter',(860,272,868,296))):
+            with self.subTest(scene=name):
+                mask=glow_mask(keyframe(name,(960,540)),name)
+                self.assertFalse(mask[top:bottom,left:right].any())
 
 
 if __name__ == "__main__":
