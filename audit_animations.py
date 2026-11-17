@@ -10,12 +10,12 @@ from pixel_frame import SCENES
 
 def audit():
     root=Path(__file__).resolve().parent
-    preview=root/'previews'
+    preview=root/'pictures'/'previews'
     preview.mkdir(exist_ok=True)
     results=[]
     storyboard=Image.new('RGB',(960,len(SCENES)*202))
     for row,name in enumerate(SCENES):
-        with Image.open(root/'assets'/f'{name}-animated.webp') as animation:
+        with Image.open(root/'pictures'/f'{name}.webp') as animation:
             assert animation.size==(1920,1080),name
             assert animation.n_frames%48==0,(name,animation.n_frames)
             picks=(0,animation.n_frames//6,animation.n_frames//2)

@@ -4,7 +4,7 @@ Painted, animated landscapes for a Raspberry Pi picture frame. Ten 1920×1080
 scenes play as seamless 24-second loops on the Linux framebuffer. There is no
 desktop, touchscreen or network service involved.
 
-![Woodland in late-afternoon light](assets/woodland-animated.gif)
+![Woodland in late-afternoon light](pictures/previews/woodland.gif)
 
 ## Start it at boot
 
@@ -85,14 +85,14 @@ gives a quick tour.
 
 ## Your own scenes
 
-Put stills or animations in `scenes/`: PNG, JPG, animated GIF or WebP. Each
+Put stills or animations in `pictures/`: PNG, JPG, animated GIF or WebP. Each
 file joins the playlist all year under its file name, with the same day and
 night lighting. Pictures are scaled to fill the screen. Small pixel art keeps
 its hard edges.
 
 Stars come out by themselves over clear blue sky. To make windows or lamps
 glow at night, add a mask with the same name and a `-glow.png` suffix, white
-where the light is: `scenes/harbour.png` and `scenes/harbour-glow.png`. Trace
+where the light is: `pictures/harbour.png` and `pictures/harbour-glow.png`. Trace
 each light closely: the mask is on or off per pixel, and at night a lit wall
 beside a window shows.
 
@@ -107,7 +107,7 @@ python3 pixel_frame.py --scene pond --at 07:30 --export pond.png
 
 GIFs are 640 pixels wide by default (`--gif-width`). Every frame shares one
 palette and only stores the pixels that changed, which keeps a 24-second loop
-small enough to send in a chat. `assets/woodland-animated.gif` above is made
+small enough to send in a chat. `pictures/previews/woodland.gif` above is made
 this way.
 
 ## How the loops are made
@@ -138,7 +138,7 @@ python3 audit_animations.py
 
 `audit_animations.py` checks frame counts, timing, visible motion and the
 last-to-first transition, and refreshes the posters for
-`previews/animations.html`, a browser gallery of the loops.
+`pictures/previews/animations.html`, a browser gallery of the loops.
 
 ## Under the hood
 

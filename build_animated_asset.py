@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build a scene's seamless 8 FPS 1080p loop, and its night-glow mask, from its keyframe.
 
-The keyframe, assets/<scene>-keyframe.png, is the painting at 1920x1080; make
+The keyframe, pictures/sources/<scene>-keyframe.png, is the painting at 1920x1080; make
 it with upscale_keyframes.py.
 """
 
@@ -16,12 +16,13 @@ from PIL import Image
 
 from scene_motion import GLOW, glow_mask, scene_frames
 
-ASSETS = Path(__file__).with_name("assets")
+PICTURES = Path(__file__).with_name("pictures")
+SOURCES = PICTURES/"sources"
 FPS = 8
 
 
 def keyframe(theme: str) -> np.ndarray:
-    base = np.array(Image.open(ASSETS/f"{theme}-keyframe.png").convert("RGB"))
+    base = np.array(Image.open(SOURCES/f"{theme}-keyframe.png").convert("RGB"))
     if base.shape[:2] != (1080, 1920):
         raise ValueError(f"{theme} keyframe must be 1920x1080, not {base.shape[1]}x{base.shape[0]}")
     return base
@@ -30,7 +31,7 @@ def keyframe(theme: str) -> np.ndarray:
 def write_glow(theme: str, base: np.ndarray) -> None:
     """The mask of windows and lamps that the player keeps lit at night."""
     if theme in GLOW:
-        Image.fromarray(glow_mask(base, theme)).save(ASSETS/f"{theme}-glow.png", optimize=True)
+        Image.fromarray(glow_mask(base, theme)).save(PICTURES/f"{theme}-glow.png", optimize=True)
 
 
 def build(theme: str, beats: int = 4) -> Path:
@@ -41,7 +42,7 @@ def build(theme: str, beats: int = 4) -> Path:
     base = keyframe(theme)
     write_glow(theme, base)
     frames = list(scene_frames(base, theme, 48*beats, beats=beats))
-    output = ASSETS/f"{theme}-animated.webp"
+    output = PICTURES/f"{theme}.webp"
     temporary = output.with_suffix(".building.webp")
     frames[0].save(temporary, save_all=True, append_images=frames[1:], duration=1000//FPS,
                    loop=0, quality=84, method=3)

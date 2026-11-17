@@ -30,8 +30,7 @@ import numpy as np
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent
-ASSET_DIR = ROOT / "assets"
-SCENES_DIR = ROOT / "scenes"
+PICTURES = ROOT / "pictures"  # every scene the frame shows, with its glow mask
 SCENES = ("woodland", "meadow", "pond", "autumn", "winter",
           "christmas", "tornado", "tsunami", "balloons", "sakura")
 # Months in which a scene joins the playlist. Unlisted scenes play all year.
@@ -51,9 +50,9 @@ KDSETMODE, KD_TEXT, KD_GRAPHICS = 0x4B3A, 0, 1
 
 # Scenes and the playlist -------------------------------------------------
 
-def scene_library(scenes_dir: Path = SCENES_DIR) -> dict[str, Path]:
-    """Built-in loops, then any still or animation dropped into scenes_dir."""
-    library = {name: ASSET_DIR / f"{name}-animated.webp" for name in SCENES}
+def scene_library(scenes_dir: Path = PICTURES) -> dict[str, Path]:
+    """Built-in loops in playlist order, then every other still or animation in scenes_dir."""
+    library = {name: PICTURES / f"{name}.webp" for name in SCENES}
     if scenes_dir.is_dir():
         for path in sorted(scenes_dir.iterdir()):
             if path.suffix.lower() not in MEDIA or path.stem.endswith("-glow"):
@@ -667,7 +666,7 @@ def export_gif(name: str, path: Path, light: tuple[float, bool], output: Path, w
 def main() -> None:
     parser = argparse.ArgumentParser(description="Painted, animated landscapes for a framebuffer picture frame")
     parser.add_argument("--device", default="/dev/fb0", help="framebuffer device (default: /dev/fb0)")
-    parser.add_argument("--scenes-dir", type=Path, default=SCENES_DIR,
+    parser.add_argument("--scenes-dir", type=Path, default=PICTURES,
                         help="folder of your own stills, GIFs or WebPs to add to the playlist")
     parser.add_argument("--start-scene", help="scene to show first; the clock-based playlist follows")
     parser.add_argument("--seconds-per-scene", type=float, default=SECONDS_PER_SCENE,

@@ -12,13 +12,13 @@ try:
 except ImportError:
     cv2 = None
 
-ASSETS = Path(__file__).with_name('assets')
+SOURCES = Path(__file__).with_name('pictures')/'sources'
 NAMES = ('woodland', 'meadow', 'pond', 'autumn', 'winter', 'christmas',
          'tornado', 'tsunami', 'balloons', 'sakura')
 
 
 def keyframe(name, size):
-    with Image.open(ASSETS/f'{name}-keyframe.png') as image:
+    with Image.open(SOURCES/f'{name}-keyframe.png') as image:
         return np.array(image.convert('RGB').resize(size, Image.Resampling.LANCZOS))
 
 

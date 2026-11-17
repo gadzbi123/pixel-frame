@@ -35,7 +35,7 @@ const descriptions={
 const names=Object.keys(descriptions),selector=document.querySelector('#scene'),img=document.querySelector('#animation');
 let playing=true;
 names.forEach(name=>selector.add(new Option(name[0].toUpperCase()+name.slice(1),name)));
-function show(){const name=selector.value;img.src=playing?`../assets/${name}-animated.webp`:`${name}-poster.jpg`;img.alt=`${name} animation`;document.querySelector('#description').textContent=descriptions[name];document.querySelector('#pause').textContent=playing?'Pause':'Play';}
+function show(){const name=selector.value;img.src=playing?`../${name}.webp`:`${name}-poster.jpg`;img.alt=`${name} animation`;document.querySelector('#description').textContent=descriptions[name];document.querySelector('#pause').textContent=playing?'Pause':'Play';}
 selector.onchange=show;
 document.querySelector('#previous').onclick=()=>{selector.selectedIndex=(selector.selectedIndex+names.length-1)%names.length;show();};
 document.querySelector('#next').onclick=()=>{selector.selectedIndex=(selector.selectedIndex+1)%names.length;show();};

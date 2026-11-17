@@ -20,7 +20,7 @@ from PIL import Image
 from torch import nn
 from torch.nn import functional as F
 
-ASSETS = Path(__file__).with_name("assets")
+SOURCES = Path(__file__).with_name("pictures")/"sources"
 MODELS = Path.home()/".cache"/"pixel-frame"/"models"
 
 
@@ -128,9 +128,9 @@ def source_painting(theme: str) -> Image.Image:
     """The first keyframe of the scene's sheet; meadow uses its bladeless repaint."""
     if theme == "meadow":
         # Repainted from the 836x470 keyframe at a larger size, without more detail.
-        return (Image.open(ASSETS/"meadow-motion-background.png").convert("RGB")
+        return (Image.open(SOURCES/"meadow-motion-background.png").convert("RGB")
                 .resize((836, 470), Image.Resampling.LANCZOS))
-    sheet = Image.open(ASSETS/f"{theme}-animation-sheet.png").convert("RGB")
+    sheet = Image.open(SOURCES/f"{theme}-animation-sheet.png").convert("RGB")
     return sheet.crop((0, 0, sheet.width//2, sheet.height//2))
 
 
@@ -144,7 +144,7 @@ if __name__ == "__main__":
     for theme in arguments.themes:
         large = upscale(model, source_painting(theme))
         keyframe = large.resize((1920, 1080), Image.Resampling.LANCZOS)
-        temporary = ASSETS/f"{theme}-keyframe.partial.png"
+        temporary = SOURCES/f"{theme}-keyframe.partial.png"
         keyframe.save(temporary, optimize=True)
-        temporary.replace(ASSETS/f"{theme}-keyframe.png")  # Builds never see half a file.
-        print(f"{theme}: {keyframe.size} -> {ASSETS/f'{theme}-keyframe.png'}", flush=True)
+        temporary.replace(SOURCES/f"{theme}-keyframe.png")  # Builds never see half a file.
+        print(f"{theme}: {keyframe.size} -> {SOURCES/f'{theme}-keyframe.png'}", flush=True)
