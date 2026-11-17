@@ -43,23 +43,24 @@ To change options for the service, put them in `/etc/default/pixel-frame` and
 restart:
 
 ```bash
-PIXEL_FRAME_ARGS="--quiet-hours 00:00-06:30 --seconds-per-scene 600"
+PIXEL_FRAME_ARGS="--night 22:00-06:30 --seconds-per-scene 600"
 ```
 
 ## What you see
 
-**The real sky.** Lighting follows the sun where you live: dawn colours at
-sunrise, full light at noon, an amber dusk at sunset and moonlit blue at night.
-The location defaults to your time zone's city (from tzdata); set
-`--latitude` and `--longitude` to be exact. `--day-seconds 120` runs a fast
-two-minute day instead, for demos.
+**Day and night.** Night is from 23:00 to 07:00; the rest of the day a scene is
+shown as painted. At 23:00 the picture turns golden and night falls over 15
+minutes, and from 06:45 it brightens back to day by 07:00. The display stays on
+all night. Change the hours with `--night 22:30-06:00`. `--day-seconds 120`
+runs a fast two-minute day instead, for demos.
 
-**Lights at night.** Cabin windows, lanterns, the village and the tree lights
-keep glowing warm after dark while the rest of the painting dims.
+**Night.** After dark the painting is relit as moonlight. The sky goes deep
+blue and stars come out and twinkle, clouds and snow turn silver, and colours
+fade. A sun in the painting becomes the moon. The Christmas scene is painted
+at night already and keeps its own light.
 
-**Quiet hours.** The picture dims during the hour before 23:00 and the display
-switches off from 23:00 to 07:00. Change it with `--quiet-hours 22:30-06:00`,
-or turn it off with `--quiet-hours off`.
+**Lights at night.** Cabin windows, lanterns, the village, the tree lights and
+lava keep glowing warm after dark.
 
 **Seasons.** Each scene shows for 12 minutes, then crossfades to the next.
 Seasonal scenes join the playlist in their months; the rest play all year.
@@ -89,9 +90,11 @@ file joins the playlist all year under its file name, with the same day and
 night lighting. Pictures are scaled to fill the screen. Small pixel art keeps
 its hard edges.
 
-To make windows or lamps glow at night, add a mask with the same name and a
-`-glow.png` suffix, white where the light is: `scenes/harbour.png` and
-`scenes/harbour-glow.png`.
+Stars come out by themselves over clear blue sky. To make windows or lamps
+glow at night, add a mask with the same name and a `-glow.png` suffix, white
+where the light is: `scenes/harbour.png` and `scenes/harbour-glow.png`. Trace
+each light closely: the mask is on or off per pixel, and at night a lit wall
+beside a window shows.
 
 ## Share a scene
 
@@ -141,8 +144,10 @@ last-to-first transition, and refreshes the posters for
 
 The player decodes the current and the next scene in the background and keeps
 their frames in the display's RGB565 format. Lighting a frame is then one
-table lookup per pixel, about 25 ms on a Pi 4 at 8 FPS. It needs an RGB565
-(16-bit) Linux framebuffer and reads its resolution, offsets and stride.
+table lookup per pixel, about 35 ms on a Pi 4 at 8 FPS. The tables come in
+fours, one per cell of a 2×2 dither, because 16-bit colour has too few dark
+levels for a night sky and would band. It needs an RGB565 (16-bit) Linux
+framebuffer and reads its resolution, offsets and stride.
 
 ```bash
 python3 -m unittest -v                                        # player

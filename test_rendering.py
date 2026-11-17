@@ -1,4 +1,3 @@
-import datetime as dt
 import tempfile
 import time
 import unittest
@@ -10,8 +9,6 @@ from PIL import Image
 import pixel_frame as pf
 from tty_scene import render_text
 
-UTC = dt.timezone.utc
-WARSAW = (52.2297, 21.0122)
 
 
 def unpack(code):
@@ -19,83 +16,185 @@ def unpack(code):
     return r << 3 | r >> 2, g << 2 | g >> 4, b << 3 | b >> 2
 
 
-class LightingTests(unittest.TestCase):
-    def test_lighting_changes_gradually_including_day_wrap(self):
-        luts = [pf.channel_lut(n/240).astype(int) for n in range(240)]
-        for first, second in zip(luts, luts[1:]+luts[:1]):
-            self.assertLessEqual(np.abs(first-second).max(), 4)
+DAY, NIGHT = (12.0, False), (-12.0, False)
 
-    def test_single_lookup_matches_per_channel_lighting(self):
-        for step in (0, 60, 130, 180):
-            channels, lut = pf.channel_lut(step/240), pf.lut565(step)
+
+def brightness(code):
+    return sum(unpack(int(code)))
+
+
+class LightingTests(unittest.TestCase):
+    def test_light_changes_gradually_from_day_to_night(self):
+        grid = np.stack(np.meshgrid(*[np.arange(0, 256, 51)]*3), -1).reshape(-1, 3)
+        for rising in (False, True):
+            steps = [pf.relight(grid, eighths/8, rising) for eighths in range(96, -97, -1)]
+            for first, second in zip(steps, steps[1:]):
+                self.assertLessEqual(np.abs(first-second).max(), 6)
+
+    def test_every_dither_table_is_within_a_level_of_the_lighting(self):
+        for light in (DAY, (0.0, False), (-4.0, True), NIGHT):
+            tables = pf.lut565(light)
             for code in (0xFFFF, 0x8410, 0x1D5D, 0xF800, 0x07E0, 0x39E7):
-                lit = int(lut[code])
-                fields = (lit >> 11, lit >> 5 & 63, lit & 31)
-                for channel, value, levels in zip(range(3), unpack(code), (31, 63, 31)):
-                    # Within one RGB565 step of lighting the 8-bit colour.
-                    self.assertLessEqual(abs(fields[channel] - int(channels[channel][value])*levels/255), 1)
+                exact = np.clip(pf.relight(np.array(unpack(code)), *light), 0, 255)*np.array([31, 63, 31])/255
+                for table in tables:
+                    lit = int(table[code])
+                    for field, level in zip((lit >> 11, lit >> 5 & 63, lit & 31), exact):
+                        self.assertLessEqual(abs(field - level), 1)
+
+    def test_dither_cells_average_out_the_coarse_night_levels(self):
+        tables = pf.lut565(NIGHT)
+        for code in (0x1D5D, 0x8410, 0x5AFF):
+            exact = np.clip(pf.relight(np.array(unpack(code)), *NIGHT), 0, 255)[2]*31/255
+            self.assertLess(abs(np.mean([int(table[code]) & 31 for table in tables]) - exact), .26)
+
+    def test_by_day_the_painting_is_shown_as_painted(self):
+        for code in (0xFFFF, 0x8410, 0x1D5D, 0xF800, 0x07E0, 0x39E7):
+            self.assertEqual({int(table[code]) for table in pf.lut565(DAY)}, {code})
+
+    def test_night_is_dark_and_blue_with_the_sky_darker_than_the_clouds(self):
+        sky, cloud, grass = (pf.relight(np.array(colour), *NIGHT)
+                             for colour in ((70, 140, 230), (240, 240, 245), (120, 180, 60)))
+        self.assertLess(sky.sum(), 130)
+        self.assertLess(sky.sum(), cloud.sum()/2)
+        self.assertLess(cloud.sum(), (240 + 240 + 245)*.6)
+        for colour in (sky, cloud, grass):
+            self.assertGreater(colour[2], colour[1])
+            self.assertGreater(colour[1], colour[0])
+
+    def test_a_scene_painted_at_night_stays_as_painted(self):
+        with tempfile.TemporaryDirectory() as folder:
+            for name in ("christmas", "meadow"):
+                Image.new("RGB", (64, 36), (230, 150, 60)).save(Path(folder)/f"{name}.png")
+                Image.new("L", (64, 36), 255).crop((0, 0, 64, 36)).save(Path(folder)/f"{name}-glow.png")
+            christmas, meadow = (pf.decode_loop(name, Path(folder)/f"{name}.png", (64, 36)) for name in ("christmas", "meadow"))
+        np.testing.assert_array_equal(christmas.lit(0, NIGHT), christmas.lit(0, DAY))
+        self.assertFalse((meadow.lit(0, NIGHT) == meadow.lit(0, DAY)).any())
+
+    def test_low_sun_warms_the_picture(self):
+        grey = np.array((180, 180, 180))
+        for rising in (True, False):
+            red, green, blue = pf.relight(grey, 1.0, rising)
+            self.assertGreater(red, green + 15)
+            self.assertGreater(green, blue + 15)
+        self.assertGreater(pf.relight(grey, 1.0, True)[2], pf.relight(grey, 1.0, False)[2])  # dawn is the cooler
+
+    def test_dusk_darkens_step_by_step_without_a_jump(self):
+        for colour in ((120, 160, 90), (70, 140, 230)):   # grass, sky
+            levels = [pf.relight(np.array(colour), float(elevation), False).sum() for elevation in range(0, -13, -2)]
+            for before, after in zip(levels, levels[1:]):
+                self.assertLess(after, before*.99)
+                self.assertGreater(after, before*.8)
 
     def test_night_is_darker_but_glowing_windows_are_not(self):
-        noon, midnight = pf.LIGHT_STEPS//4, pf.LIGHT_STEPS*3//4
         warm = 0xFE60  # a lit-window yellow
-        self.assertLess(sum(unpack(int(pf.lut565(midnight)[warm]))),
-                        sum(unpack(int(pf.lut565(noon)[warm]))))
-        self.assertGreaterEqual(sum(unpack(int(pf.lut565(midnight, glow=True)[warm]))),
-                                sum(unpack(int(pf.lut565(noon)[warm]))))
-        self.assertEqual(pf.lut565(noon, glow=True)[warm], pf.lut565(noon)[warm])
-
-    def test_dimming_darkens(self):
-        self.assertLess(sum(unpack(int(pf.lut565(60, .6)[0xFFFF]))),
-                        sum(unpack(int(pf.lut565(60)[0xFFFF]))))
+        self.assertLess(brightness(pf.lut565(NIGHT)[0][warm]), brightness(pf.lut565(DAY)[0][warm]))
+        self.assertGreaterEqual(brightness(pf.lut565(NIGHT, glow=True)[0][warm]),
+                                brightness(pf.lut565(DAY)[0][warm]))
+        self.assertEqual(pf.lut565(DAY, glow=True)[0][warm], pf.lut565(DAY)[0][warm])
 
     def test_glowing_pixels_keep_their_brightness_at_night(self):
         frames = np.full((1, 2, 2), 0xFE60, np.uint16)
         loop = pf.Loop(frames, [1000], np.array([0]))
-        image = loop.lit(0, pf.LIGHT_STEPS*3//4, 1.0).reshape(-1)
-        self.assertGreater(sum(unpack(int(image[0]))), sum(unpack(int(image[1]))))
+        image = loop.lit(0, NIGHT).reshape(-1)
+        self.assertGreater(brightness(image[0]), brightness(image[1]))
 
 
-class SunTests(unittest.TestCase):
-    def assertClose(self, actual, hour, minute, tolerance=4):
-        expected = actual.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        self.assertLessEqual(abs((actual-expected).total_seconds()), tolerance*60, actual)
+def landscape(size=(320, 180), balloon=False):
+    """Blue sky with a cloud over green land and a lake the colour of the sky."""
+    image = Image.new("RGB", size, (60, 130, 230))
+    width, height = size
+    image.paste((245, 245, 250), (width//2, height//8, width*3//4, height//4))  # cloud
+    image.paste((70, 140, 60), (0, height*2//5, width, height))                 # land
+    image.paste((60, 130, 230), (width//4, height*3//5, width*3//4, height*4//5))  # lake
+    if balloon:
+        image.paste((220, 40, 40), (0, 0, width//4, height//4))
+    return image
 
-    def test_warsaw_solstices_match_the_almanac(self):
-        rise, _, sunset = pf.sun_events(dt.date(2026, 6, 21), *WARSAW)
-        self.assertClose(rise, 2, 14)    # 04:14 CEST
-        self.assertClose(sunset, 19, 1)  # 21:01 CEST
-        rise, _, sunset = pf.sun_events(dt.date(2026, 12, 21), *WARSAW)
-        self.assertClose(rise, 6, 43)    # 07:43 CET
-        self.assertClose(sunset, 14, 25)  # 15:25 CET
 
-    def test_phase_landmarks_follow_the_sun(self):
-        day = dt.date(2026, 11, 11)
-        rise, noon, sunset = pf.sun_events(day, *WARSAW)
-        next_rise = pf.sun_events(day + dt.timedelta(days=1), *WARSAW)[0]
-        for when, phase in ((rise, 0), (noon, .25), (sunset, .5),
-                            (sunset + (next_rise-sunset)/2, .75)):
-            value = pf.sun_phase(when + dt.timedelta(seconds=1), *WARSAW)
-            self.assertLess(min(abs(value-phase), 1-abs(value-phase)), .001)
+class StarTests(unittest.TestCase):
+    def test_stars_come_out_only_in_clear_sky(self):
+        picture = landscape()
+        stars = pf.find_stars(np.asarray(picture))
+        rows, columns = np.divmod(stars.index, 320)
+        self.assertGreater(len(rows), 20)
+        self.assertLess(rows.max(), 180*2//5)                                  # not on land or lake
+        self.assertFalse(((rows >= 180//8) & (rows < 180//4) & (columns >= 160) & (columns < 240)).any())
+        self.assertIsNone(pf.find_stars(np.asarray(Image.new("RGB", (320, 180), (70, 140, 60)))))
 
-    def test_phase_moves_smoothly_through_a_year_of_days(self):
-        start = dt.datetime(2026, 1, 1, tzinfo=UTC)
-        previous = pf.sun_phase(start, *WARSAW)
-        for minutes in range(10, 366*24*60, 10*24*60 + 7):
-            for step in range(0, 24*60, 10):
-                value = pf.sun_phase(start + dt.timedelta(minutes=minutes+step), *WARSAW)
-                if step:
-                    self.assertLess((value-previous) % 1, .02)
-                previous = value
+    def test_stars_shine_at_night_and_hide_behind_what_passes(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder)/"sky.gif"
+            landscape().save(path, save_all=True, append_images=[landscape(balloon=True)], duration=[100, 100], loop=0)
+            loop = pf.decode_loop("sky", path, (320, 180))
+        rows, columns = np.divmod(loop.stars.index, 320)
+        behind = (rows < 180//4) & (columns < 320//4)
+        self.assertTrue(behind.any() and (~behind).any())
+        self.assertTrue(loop.clear[0].all())
+        np.testing.assert_array_equal(loop.clear[1], ~behind)
 
-    def test_polar_night_and_day_do_not_fail(self):
-        for day in (dt.datetime(2026, 12, 21, 12, tzinfo=UTC), dt.datetime(2026, 6, 21, 0, tzinfo=UTC)):
-            self.assertTrue(0 <= pf.sun_phase(day, 78.2, 15.6) < 1)
+        night = loop.lit(0, NIGHT).reshape(-1).astype(int)
+        starless = pf.Loop(loop.frames, loop.ends)
+        plain = starless.lit(0, NIGHT).reshape(-1).astype(int)
+        changed = np.flatnonzero(night != plain)
+        self.assertGreater(len(changed), 10)
+        self.assertTrue(set(changed) <= set(loop.stars.index))
+        self.assertTrue(all(brightness(night[i]) > brightness(plain[i]) for i in changed))
+        hidden = loop.lit(.1, NIGHT).reshape(-1)[loop.stars.index[behind]]
+        np.testing.assert_array_equal(hidden, starless.lit(.1, NIGHT).reshape(-1)[loop.stars.index[behind]])
 
-    def test_tzdata_coordinates(self):
-        self.assertEqual(pf.iso6709("+5215+02100"), (52.25, 21.0))
-        latitude, longitude = pf.iso6709("-332318-0703716")
-        self.assertAlmostEqual(latitude, -(33 + 23/60 + 18/3600))
-        self.assertAlmostEqual(longitude, -(70 + 37/60 + 16/3600))
+    def test_no_stars_by_day(self):
+        frames = pf.pack565(np.asarray(landscape()))[None]
+        stars = pf.find_stars(np.asarray(landscape()))
+        np.testing.assert_array_equal(pf.Loop(frames, [1000], stars=stars).lit(0, DAY),
+                                      pf.Loop(frames, [1000]).lit(0, DAY))
+
+
+def local(hour, minute, second=0):
+    return time.mktime((2026, 11, 14, hour, minute, second, 0, 0, -1))
+
+
+class NightHoursTests(unittest.TestCase):
+    def test_day_outside_the_night_hours_and_night_inside_them(self):
+        light = pf.Settings().light
+        for clock in ((7, 0), (7, 1), (12, 0), (16, 30), (20, 0), (22, 59)):
+            self.assertEqual(light(local(*clock)), DAY, clock)
+        for clock in ((23, 15), (0, 0), (3, 0), (6, 45)):
+            self.assertEqual(light(local(*clock)), NIGHT, clock)
+
+    def test_the_sun_sets_at_eleven_and_rises_by_seven(self):
+        light = pf.Settings().light
+        self.assertEqual(light(local(23, 0)), DAY)
+        dusk = light(local(23, 10))
+        self.assertFalse(dusk[1])
+        self.assertTrue(0 < pf.night_amount(dusk[0]) < 1)
+        dawn = light(local(6, 50))
+        self.assertTrue(dawn[1])
+        self.assertTrue(0 < pf.night_amount(dawn[0]) < 1)
+        self.assertEqual(pf.star_strength(light(local(23, 1))[0]), 0)
+
+    def test_light_moves_in_small_steps_through_dusk(self):
+        light = pf.Settings().light
+        elevations = [light(local(22, 55) + 2*n)[0] for n in range(30*25)]
+        self.assertEqual((max(elevations), min(elevations)), (12, -12))
+        self.assertLessEqual(max(abs(a-b) for a, b in zip(elevations, elevations[1:])), .125)
+
+    def test_other_night_hours(self):
+        light = pf.Settings(night=pf.parse_night("01:30-05:00")).light
+        self.assertEqual(light(local(23, 30)), DAY)
+        self.assertEqual(light(local(3, 0)), NIGHT)
+        self.assertEqual(light(local(5, 0)), DAY)
+
+    def test_invalid_night_hours(self):
+        self.assertEqual(pf.parse_night("23:00-07:00"), (23*60, 7*60))
+        for text in ("23:00", "25:00-07:00", "noon-07:00", "off"):
+            with self.assertRaises(ValueError):
+                pf.parse_night(text)
+
+    def test_a_demo_day_runs_from_full_day_to_full_night(self):
+        settings = pf.Settings(day_seconds=120)
+        lights = {settings.light(second) for second in range(120)}
+        self.assertTrue({DAY, NIGHT} <= lights)
+        self.assertTrue(any(rising for _, rising in lights))
 
 
 class PlaylistTests(unittest.TestCase):
@@ -132,24 +231,6 @@ class PlaylistTests(unittest.TestCase):
         self.assertEqual((current, remaining), ("christmas", 720))
         self.assertEqual(pf.schedule(pf.SCENES, settings, now, now+721)[0], upcoming)
 
-
-class QuietHoursTests(unittest.TestCase):
-    def test_dims_before_and_switches_off_during_quiet_hours(self):
-        quiet = pf.parse_quiet("23:00-07:00")
-        state = lambda clock: pf.quiet_state(pf.clock_minutes(clock), quiet)
-        self.assertEqual(state("23:30"), (True, 1.0))
-        self.assertEqual(state("06:59"), (True, 1.0))
-        self.assertEqual(state("07:00"), (False, 1.0))
-        self.assertEqual(state("21:59"), (False, 1.0))
-        self.assertAlmostEqual(state("22:30")[1], .8)
-        self.assertGreater(state("22:10")[1], state("22:50")[1])
-
-    def test_off_and_invalid_values(self):
-        self.assertIsNone(pf.parse_quiet("off"))
-        self.assertEqual(pf.quiet_state(0, None), (False, 1.0))
-        for text in ("23:00", "25:00-07:00", "noon-07:00"):
-            with self.assertRaises(ValueError):
-                pf.parse_quiet(text)
 
 
 class FrameTests(unittest.TestCase):
@@ -207,9 +288,8 @@ class DropInTests(unittest.TestCase):
             folder = Path(folder)
             tiny_animation(folder/"tiny.gif", durations=(125, 125, 125))
             output = folder/"share.gif"
-            pf.export_gif("tiny", folder/"tiny.gif", .25, output, width=64)
-            source = [np.asarray(pf.lit_image(Image.new("RGB", (64, 36), color), .25, None)).astype(int)
-                      for color in ((200, 40, 40), (40, 200, 40), (40, 40, 200))]
+            pf.export_gif("tiny", folder/"tiny.gif", DAY, output, width=64)
+            source = [np.full((36, 64, 3), color) for color in ((200, 40, 40), (40, 200, 40), (40, 40, 200))]
             with Image.open(output) as gif:
                 self.assertEqual((gif.n_frames, gif.info["loop"]), (3, 0))
                 for index, expected in enumerate(source):

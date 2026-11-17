@@ -5,8 +5,8 @@ Show the playlist on the display (the systemd service runs this at boot):
     python3 pixel_frame.py
 
 Export a still or a shareable GIF, lit for a time of day:
-    python3 pixel_frame.py --scene pond --at 20:30 --export pond.png
-    python3 pixel_frame.py --scene pond --at 20:30 --export-gif pond.gif
+    python3 pixel_frame.py --scene pond --at 23:30 --export pond.png
+    python3 pixel_frame.py --scene pond --at 23:30 --export-gif pond.gif
 """
 
 from __future__ import annotations
@@ -37,14 +37,15 @@ SCENES = ("woodland", "meadow", "pond", "autumn", "winter",
 # Months in which a scene joins the playlist. Unlisted scenes play all year.
 SEASONS = {"sakura": {3, 4, 5}, "autumn": {9, 10, 11},
            "winter": {12, 1, 2}, "christmas": {12}}
+# Scenes that are night scenes already. They are shown as painted after dark:
+# moonlight would put out their lamplight.
+PAINTED_AT_NIGHT = {"christmas"}
 MEDIA = {".webp", ".gif", ".png", ".jpg", ".jpeg"}
 SCREEN = (1920, 1080)
 SECONDS_PER_SCENE = 720
-LIGHT_STEPS = 240
 MAX_FRAMES = 480  # Longer drop-in animations are sampled to bound memory.
 
-FBIOGET_VSCREENINFO, FBIOBLANK = 0x4600, 0x4611
-FB_BLANK_UNBLANK, FB_BLANK_POWERDOWN = 0, 4
+FBIOGET_VSCREENINFO, FBIOBLANK, FB_BLANK_UNBLANK = 0x4600, 0x4611, 0
 KDSETMODE, KD_TEXT, KD_GRAPHICS = 0x4B3A, 0, 1
 
 
@@ -86,95 +87,15 @@ def scene_at(names, when: float, seconds_per_scene: float) -> tuple[str, float]:
     return shown[int(slot) % len(shown)], seconds_per_scene - elapsed
 
 
-# Daylight ----------------------------------------------------------------
+# Night hours -------------------------------------------------------------
 
-def sun_events(day: dt.date, latitude: float, longitude: float):
-    """Sunrise, solar noon and sunset in UTC, after NOAA's approximation.
-
-    In polar day or night the hour angle is clamped, so the day collapses into
-    one long day or night with a brief dawn and dusk."""
-    g = 2*math.pi*(day.timetuple().tm_yday - 1)/365
-    equation = 229.18*(.000075 + .001868*math.cos(g) - .032077*math.sin(g)
-                       - .014615*math.cos(2*g) - .040849*math.sin(2*g))
-    declination = (.006918 - .399912*math.cos(g) + .070257*math.sin(g)
-                   - .006758*math.cos(2*g) + .000907*math.sin(2*g)
-                   - .002697*math.cos(3*g) + .00148*math.sin(3*g))
-    lat = math.radians(latitude)
-    cos_hour = (math.cos(math.radians(90.833))/(math.cos(lat)*math.cos(declination))
-                - math.tan(lat)*math.tan(declination))
-    half = dt.timedelta(minutes=4*math.degrees(math.acos(max(-1, min(1, cos_hour)))))
-    noon = (dt.datetime.combine(day, dt.time(), dt.timezone.utc)
-            + dt.timedelta(minutes=720 - 4*longitude - equation))
-    return noon - half, noon, noon + half
+NIGHTFALL = 15  # minutes the picture takes to turn between day and night, inside the night hours
 
 
-def sun_phase(when: dt.datetime, latitude: float, longitude: float) -> float:
-    """Place real time on the lighting cycle: sunrise 0, noon .25, sunset .5, midnight .75."""
-    today = when.astimezone(dt.timezone.utc).date()
-    days = [sun_events(today + dt.timedelta(days=offset), latitude, longitude)
-            for offset in (-1, 0, 1, 2)]
-    keys = []
-    for index, (rise, noon, sunset) in enumerate(days):
-        keys += [(rise, index), (noon, index+.25), (sunset, index+.5)]
-        if index+1 < len(days):
-            keys.append((sunset + (days[index+1][0]-sunset)/2, index+.75))
-    for (start, first), (end, last) in zip(keys, keys[1:]):
-        if start <= when < end:
-            return (first + (last-first)*(when-start)/(end-start)) % 1
-    raise ValueError(f"{when} is outside the computed days")
-
-
-def zone_location() -> tuple[float, float] | None:
-    """Coordinates of the system time zone's principal city, from tzdata."""
-    try:
-        zone = Path("/etc/timezone").read_text().strip()
-    except OSError:
-        zone = os.path.realpath("/etc/localtime").partition("zoneinfo/")[2]
-    try:
-        table = Path("/usr/share/zoneinfo/zone1970.tab").read_text()
-    except OSError:
-        return None
-    for line in table.splitlines():
-        fields = line.split("\t")
-        if not line.startswith("#") and len(fields) > 2 and fields[2] == zone:
-            return iso6709(fields[1])
-    return None
-
-
-def iso6709(text: str) -> tuple[float, float]:
-    """Parse tzdata coordinates such as +5215+02100 or -332318+0703716."""
-    split = max(text.rfind("+"), text.rfind("-"))
-
-    def degrees(part: str, width: int) -> float:
-        digits = part[1:]
-        value = (int(digits[:width]) + int(digits[width:width+2])/60
-                 + int(digits[width+2:] or 0)/3600)
-        return -value if part[0] == "-" else value
-    return degrees(text[:split], 2), degrees(text[split:], 3)
-
-
-def quiet_state(minute: int, quiet: tuple[int, int] | None, dim_minutes: int = 60):
-    """(blank, dim) for a minute of the day.
-
-    The picture dims during the hour before quiet hours and the display is
-    switched off during them."""
-    if quiet is None:
-        return False, 1.0
-    start, end = quiet
-    if (minute-start) % 1440 < (end-start) % 1440:
-        return True, 1.0
-    before = (start-minute) % 1440
-    if before < dim_minutes:
-        return False, 1 - .4*(1 - before/dim_minutes)
-    return False, 1.0
-
-
-def parse_quiet(text: str) -> tuple[int, int] | None:
-    if text.lower() in ("off", "none", ""):
-        return None
+def parse_night(text: str) -> tuple[int, int]:
     parts = text.split("-")
     if len(parts) != 2:
-        raise ValueError(f"quiet hours look like 23:00-07:00, not {text}")
+        raise ValueError(f"night hours look like 23:00-07:00, not {text}")
     return clock_minutes(parts[0]), clock_minutes(parts[1])
 
 
@@ -187,60 +108,154 @@ def clock_minutes(text: str) -> int:
 
 # Lighting ----------------------------------------------------------------
 
-def daylight(phase: float) -> float:
-    return (1 + math.cos((phase-.25)*2*math.pi)) / 2
+# Scenes are painted in daylight. The frame relights them for a sun it sets
+# on the clock: warm light while the sun is near the horizon, and under it a
+# day-for-night grade, the way films shoot night scenes in sunshine.
+
+TWILIGHT = 12.0  # degrees either side of the horizon; beyond them the light no longer changes
+# What low sunlight keeps of each colour, and the colour of lamplight.
+DAWN, DUSK = np.array([1, .86, .74], np.float32), np.array([1, .82, .62], np.float32)
+LAMPLIGHT = np.array([255, 196, 120], np.float32)
+MOONLIGHT = np.array([.62, .82, 1.18], np.float32)
+STARLIGHT = np.array([225, 232, 255], np.float32)
+SHADOW = np.array([2, 5, 13], np.float32)  # the darkest a night pixel gets
+LUMA = np.array([.299, .587, .114], np.float32)
+# Brightness as a red filter sees it: blue sky and water go dark, clouds and snow stay light.
+RED_FILTER = np.array([.45, .65, -.10], np.float32)
 
 
-def lighting_parameters(phase: float, glow: bool = False):
-    """Brightness and tint at a point in the day.
+def night_amount(elevation: float) -> float:
+    """0 until the sun touches the horizon, 1 once it is 12 degrees under it.
 
-    Glowing pixels (windows, lanterns) keep their brightness and warm up after
-    dark instead of taking on the blue night tint."""
-    day = daylight(phase)
-    brightness = .58 + .42*day
-    dawn_distance = min(phase, 1-phase)
-    weights = [.08*math.exp(-(dawn_distance/.10)**2),
-               .12*math.exp(-((phase-.52)/.10)**2),
-               .24*(1-day)**2]
-    colors = [(255, 181, 145), (244, 145, 92), (38, 61, 112)]
-    if glow:
-        night = 1 - day
-        brightness += (1.1-brightness)*night
-        weights[2] = .14*night
-        colors[2] = (255, 196, 120)
-    strength = sum(weights)
-    tint = tuple(sum(w*color[c] for w, color in zip(weights, colors))/strength
-                 for c in range(3))
-    return brightness, tint, strength
+    The eye judges brightness by ratios, so the mix moves fastest at first:
+    each degree then darkens the picture by about the same share."""
+    dusk = min(1, max(0, (1 - elevation)/(1 + TWILIGHT)))
+    return (1 - .2**dusk)/.8
 
 
-def channel_lut(phase: float, dim: float = 1.0, glow: bool = False) -> np.ndarray:
-    """A 3x256 table that lights each 8-bit channel."""
-    brightness, tint, strength = lighting_parameters(phase, glow)
-    values = np.clip(np.arange(256, dtype=np.float32)*brightness, 0, 255)
-    lut = np.array([(values*(1-strength) + c*strength)*dim for c in tint])
-    return np.clip(lut, 0, 255).astype(np.uint8)
+def star_strength(elevation: float) -> float:
+    """Stars come out once the sun is 5 degrees down, the brightest first."""
+    return min(1, max(0, (-elevation - 5)/(TWILIGHT - 5)))**2
+
+
+def moonlight(rgb: np.ndarray) -> np.ndarray:
+    """Daylight colours as a moonlit night: dark, blue, with a trace of their colour left."""
+    x = rgb/255
+    luma = x @ LUMA
+    # Night vision hardly sees red: poppies and tulips are the first things to go dark.
+    red = np.clip(x[..., 0] - np.maximum(x[..., 1], x[..., 2]) - .25, 0, 1)
+    seen = np.clip(x @ RED_FILTER - .6*red, 0, 1)
+    # Whites are held back at the top, or daisies and blossom look lit from inside.
+    tone = .55*seen**1.4*(1 - .25*seen**4)
+    colour = (x - luma[..., None])*(tone/np.maximum(luma, .02))[..., None]
+    return (tone[..., None] + .15*colour)*MOONLIGHT*255 + SHADOW
+
+
+def relight(rgb, elevation: float, rising: bool, glow: bool = False, moonlit: bool = True) -> np.ndarray:
+    """Light 8-bit colours for the sun's position; floats on the same scale, not yet clipped.
+
+    Glowing pixels (windows, lanterns, lava) keep their brightness after dark
+    and warm up instead of turning to moonlight. A scene that is not moonlit
+    keeps its painted colours all night."""
+    rgb = np.asarray(rgb, np.float32)
+    low = max(0, 1 - ((elevation-1)/11)**2)**3  # how close the sun is to the horizon; 0 outside twilight
+    lit = rgb*(1 - .15*low)*(1 - low*(1 - (DAWN if rising else DUSK)))
+    night = night_amount(elevation)
+    if night and moonlit:
+        lit += ((rgb*.946 + LAMPLIGHT*.14 if glow else moonlight(rgb)) - lit)*night
+    return lit
 
 
 _CODES = np.arange(65536, dtype=np.uint32)
 _R5, _G6, _B5 = _CODES >> 11, _CODES >> 5 & 63, _CODES & 31
-_RGB8 = (_R5 << 3 | _R5 >> 2, _G6 << 2 | _G6 >> 4, _B5 << 3 | _B5 >> 2)
+_LEVELS = np.array([31, 63, 31], np.float32)
+_RGB8 = np.stack([_R5, _G6, _B5], axis=1)*(255/_LEVELS)  # every RGB565 colour, on the 8-bit scale
+# 16-bit colour has few dark levels, and a night sky would show them as bands.
+# Each cell of a 2x2 pattern rounds a little differently, which averages them out.
+DITHER = (-.375, .125, .375, -.125)  # by cell: row*2 + column
 _LUT565: dict[tuple, np.ndarray] = {}
 
 
-def lut565(step: int, dim: float = 1.0, glow: bool = False) -> np.ndarray:
-    """Light an RGB565 pixel with one lookup: 65536 entries, one per colour."""
-    key = (step, dim, glow)
-    lut = _LUT565.get(key)
-    if lut is None:
+def lut565(light: tuple[float, bool], glow: bool = False, moonlit: bool = True) -> np.ndarray:
+    """Relight an RGB565 pixel with one lookup: four tables of 65536, one per dither cell."""
+    key = (light, glow, moonlit)
+    tables = _LUT565.get(key)
+    if tables is None:
         if len(_LUT565) > 32:
             _LUT565.clear()
-        channels = channel_lut(step/LIGHT_STEPS, dim, glow).astype(np.uint32)
-        r, g, b = (channels[c][_RGB8[c]] for c in range(3))
-        # Round to the nearest RGB565 level as it expands back to 8 bits.
-        lut = ((r*31+127)//255 << 11 | (g*63+127)//255 << 5 | (b*31+127)//255).astype(np.uint16)
-        _LUT565[key] = lut
-    return lut
+        levels = np.clip(relight(_RGB8, *light, glow, moonlit), 0, 255)*(_LEVELS/255)
+        tables = np.empty((4, 65536), np.uint16)
+        for cell, offset in enumerate(DITHER):
+            r, g, b = np.clip(np.floor(levels + .5 + offset), 0, _LEVELS).astype(np.uint16).T
+            tables[cell] = r << 11 | g << 5 | b
+        _LUT565[key] = tables
+    return tables
+
+
+def brighter565(pixels: np.ndarray, colours: np.ndarray) -> np.ndarray:
+    """RGB565 pixels raised to at least the given 8-bit colours."""
+    r, g, b = (colours*(_LEVELS/255)).astype(np.uint16).T
+    return (np.maximum(pixels >> 11, r) << 11 | np.maximum(pixels >> 5 & 63, g) << 5
+            | np.maximum(pixels & 31, b))
+
+
+def same_colour565(pixels: np.ndarray, reference: np.ndarray) -> np.ndarray:
+    """Where RGB565 pixels are within a couple of levels of a reference."""
+    same = np.ones(pixels.shape, bool)
+    for shift, mask, slack in ((11, 31, 2), (5, 63, 4), (0, 31, 2)):
+        same &= np.abs((pixels >> shift & mask).astype(np.int16)
+                       - (reference >> shift & mask).astype(np.int16)) <= slack
+    return same
+
+
+@dataclass
+class Stars:
+    """Points of light in a scene's clear sky, for the night."""
+    index: np.ndarray   # flat pixel indices
+    level: np.ndarray   # brightness of each, 0 to 1
+    pace: np.ndarray    # twinkle, in radians per second
+    offset: np.ndarray  # where in its twinkle each one starts
+
+    def light(self, seconds: float, strength: float) -> np.ndarray:
+        """Their 8-bit colours at a moment."""
+        twinkle = .8 + .2*np.sin(seconds*self.pace + self.offset)
+        return (self.level*twinkle*strength)[:, None]*STARLIGHT
+
+
+def find_stars(rgb: np.ndarray) -> Stars | None:
+    """Scatter stars over the clear blue sky of a daylight picture, or None if it shows little.
+
+    Sky is what a column reaches from near the top through blue and cloud. Stars
+    go only on smooth blue and thin out towards the horizon, which keeps them
+    off clouds and peaks and, where sea meets sky, off the water."""
+    height, width = rgb.shape[:2]
+    value = rgb.astype(np.int32)
+    r, g, b = value[..., 0], value[..., 1], value[..., 2]
+    blue = (b > r + 20) & (b >= g) & (b > 110)
+    through = blue | (value @ np.array([77, 150, 29]) > 140*256)  # blue, or bright like cloud
+    started = np.logical_or.accumulate(through, axis=0)
+    ended = np.logical_or.accumulate(started & ~through, axis=0)
+    clear = started & ~ended & (np.argmax(through, axis=0) < height//4) & blue
+    for shift in ((0, 3), (3, 0), (0, -3), (-3, 0)):  # smooth: no texture and no edge
+        clear &= np.abs(b - np.roll(b, shift, (0, 1))) < 12
+    for shift in ((0, 2), (2, 0), (0, -2), (-2, 0)):  # and a little way inside it
+        clear &= np.roll(clear, shift, (0, 1))
+    horizon = int(.55*height)
+    clear[horizon:] = clear[:, :2] = clear[:, -2:] = False
+    rows, columns = np.nonzero(clear)
+    if len(rows) < 2000:
+        return None
+    rng = np.random.default_rng(7)
+    chance = (1 - rows/horizon)**1.5
+    count = min(900, len(rows)//700)
+    picks = rng.choice(len(rows), count, replace=False, p=chance/chance.sum())
+    index = rows[picks]*width + columns[picks]
+    level = np.clip(rng.pareto(2.2, count)*.25 + .25, 0, 1)
+    pace, offset = rng.uniform(1, 3, count), rng.uniform(0, 2*math.pi, count)
+    big = level > .7  # the brightest are two pixels square
+    index = np.concatenate([index] + [index[big] + step for step in (1, width, width+1)])
+    level, pace, offset = (np.concatenate([values] + [values[big]]*3) for values in (level, pace, offset))
+    return Stars(index, level, pace, offset)
 
 
 def bayer(size: int) -> np.ndarray:
@@ -282,15 +297,39 @@ class Loop:
     frames: np.ndarray            # (count, height, width) RGB565
     ends: list[int]               # when each frame ends, in ms from the loop start
     glow: np.ndarray | None = None  # flat indices of pixels that glow at night
+    moonlit: bool = True          # False for a scene painted at night, which stays as it is
+    stars: Stars | None = None
+    clear: np.ndarray | None = None  # (frame, star): nothing is passing in front of the star
+
+    def __post_init__(self):
+        if self.glow is not None:
+            rows, columns = np.divmod(self.glow, self.frames.shape[2])
+            self.glow_cell = rows % 2*2 + columns % 2
+
+    def frame_at(self, seconds: float) -> int:
+        return bisect.bisect_right(self.ends, int(seconds*1000) % self.ends[-1])
 
     def frame(self, seconds: float) -> np.ndarray:
-        return self.frames[bisect.bisect_right(self.ends, int(seconds*1000) % self.ends[-1])]
+        return self.frames[self.frame_at(seconds)]
 
-    def lit(self, seconds: float, step: int, dim: float) -> np.ndarray:
-        source = self.frame(seconds)
-        image = lut565(step, dim)[source]
+    def lit(self, seconds: float, light: tuple[float, bool]) -> np.ndarray:
+        index = self.frame_at(seconds)
+        source = self.frames[index]
+        tables = lut565(light, moonlit=self.moonlit)
+        image = np.empty_like(source)
+        for row in (0, 1):
+            for column in (0, 1):
+                image[row::2, column::2] = tables[row*2 + column][source[row::2, column::2]]
+        flat = image.reshape(-1)
         if self.glow is not None:
-            image.reshape(-1)[self.glow] = lut565(step, dim, True)[source.reshape(-1)[self.glow]]
+            lamps = lut565(light, True, self.moonlit)
+            flat[self.glow] = lamps[self.glow_cell, source.reshape(-1)[self.glow]]
+        strength = star_strength(light[0])
+        if self.stars is not None and strength:
+            colours = self.stars.light(seconds, strength)
+            if self.clear is not None:
+                colours *= self.clear[index][:, None]
+            flat[self.stars.index] = brighter565(flat[self.stars.index], colours)
         return image
 
 
@@ -335,12 +374,21 @@ def decode_loop(name: str, path: Path, size: tuple[int, int], limit: int = MAX_F
     packed = np.empty((count, size[1], size[0]), np.uint16)
     ends, total = [], 0
     for index, (image, duration) in enumerate(frames):
-        packed[index] = pack565(np.asarray(image))
+        pixels = np.asarray(image)
+        if index == 0:
+            stars = find_stars(pixels)
+        packed[index] = pack565(pixels)
         total += duration
         ends.append(total)
     mask = read_glow(glow_path(name, path), size)
     glow = None if mask is None else np.flatnonzero(np.asarray(mask) > 127)
-    return Loop(packed, ends, glow)
+    clear = None
+    if stars is not None and count > 1:
+        # A star shows only while its patch of sky looks as it did in the first frame,
+        # so balloons, birds and snow pass in front of it.
+        sky = packed.reshape(count, -1)[:, stars.index]
+        clear = same_colour565(sky, sky[0])
+    return Loop(packed, ends, glow, name not in PAINTED_AT_NIGHT, stars, clear)
 
 
 class LoopCache:
@@ -415,23 +463,16 @@ class Framebuffer:
         self.map = mmap.mmap(self.file.fileno(), stride*(self.height+yoffset))
         self.original = self.map[:]
         self.screen = screen_view(self.map, self.width, self.height, stride, xoffset, yoffset)
-        self.blanked = False
+        # Earlier versions switched the display off at night, and a run killed then left it off.
+        try:
+            fcntl.ioctl(self.file, FBIOBLANK, FB_BLANK_UNBLANK)
+        except OSError:
+            pass
 
     def show(self, image: np.ndarray) -> None:
         np.copyto(self.screen, image)
 
-    def blank(self, off: bool) -> None:
-        if off == self.blanked:
-            return
-        self.blanked = off
-        try:
-            fcntl.ioctl(self.file, FBIOBLANK, FB_BLANK_POWERDOWN if off else FB_BLANK_UNBLANK)
-        except OSError:
-            if off:
-                self.screen[:] = 0
-
     def close(self) -> None:
-        self.blank(False)
         self.screen = None
         self.map[:] = self.original
         self.map.close()
@@ -484,15 +525,29 @@ class Settings:
     seconds_per_scene: float = SECONDS_PER_SCENE
     crossfade: float = 3
     fps: float = 8
-    day_seconds: float | None = None  # a fast demo cycle instead of the real sun
-    location: tuple[float, float] = (0.0, 0.0)
-    quiet: tuple[int, int] | None = None
+    day_seconds: float | None = None  # a fast demo cycle instead of the clock
+    night: tuple[int, int] = (23*60, 7*60)  # minutes of the day that night starts and ends
     start_scene: str | None = None
 
-    def phase(self, now: float) -> float:
+    def light(self, now: float) -> tuple[float, bool]:
+        """The sun's elevation and whether it is rising, in the steps the lighting moves in.
+
+        Full day outside the night hours. Inside them the sun sets in the first
+        NIGHTFALL minutes and rises in the last. Elevation is rounded to an
+        eighth of a degree and held at the edges of twilight."""
         if self.day_seconds:
-            return (now/self.day_seconds) % 1
-        return sun_phase(dt.datetime.fromtimestamp(now, dt.timezone.utc), *self.location)
+            turn = 2*math.pi*now/self.day_seconds
+            elevation, rising = 50*math.sin(turn), math.cos(turn) > 0
+        else:
+            local = time.localtime(now)
+            start, end = self.night
+            length = (end - start) % 1440
+            into = (local.tm_hour*60 + local.tm_min + local.tm_sec/60 - start) % 1440
+            if into >= length:
+                return TWILIGHT, False
+            elevation = TWILIGHT*(1 - 2*min(into, length - into)/NIGHTFALL)
+            rising = into > length/2
+        return round(max(-TWILIGHT, min(TWILIGHT, elevation))*8)/8, rising and abs(elevation) < TWILIGHT
 
 
 def schedule(names, settings: Settings, started: float, now: float):
@@ -522,10 +577,7 @@ def run(device: str, library: dict[str, Path], settings: Settings) -> None:
         while running:
             tick = time.monotonic()
             now = time.time()
-            local = time.localtime(now)
-            off, dim = quiet_state(local.tm_hour*60 + local.tm_min, settings.quiet)
-            fb.blank(off)
-            if off or not console.visible():
+            if not console.visible():
                 time.sleep(1)
                 continue
             current, upcoming, remaining = schedule(names, settings, started, now)
@@ -533,13 +585,12 @@ def run(device: str, library: dict[str, Path], settings: Settings) -> None:
                 print(f"{time.strftime('%H:%M')} {current}", flush=True)
                 shown = current
             cache.keep({current, upcoming})
-            step = int(settings.phase(now)*LIGHT_STEPS) % LIGHT_STEPS
-            dim = round(dim*50)/50
-            image = cache.get(current).lit(tick, step, dim)
+            light = settings.light(now)
+            image = cache.get(current).lit(tick, light)
             # Decode the next scene once the current one is ready, not alongside it.
             nearby = cache.ready(upcoming) if current in cache.loops else None
             if remaining < settings.crossfade and upcoming != current and nearby is not None:
-                image = dissolve(image, nearby.lit(tick, step, dim), 1 - remaining/settings.crossfade)
+                image = dissolve(image, nearby.lit(tick, light), 1 - remaining/settings.crossfade)
             fb.show(image)
             time.sleep(max(0, 1/settings.fps - (time.monotonic()-tick)))
     finally:
@@ -551,32 +602,46 @@ def run(device: str, library: dict[str, Path], settings: Settings) -> None:
 
 # Exports -----------------------------------------------------------------
 
-def lit_image(image: Image.Image, phase: float, glow: Image.Image | None) -> Image.Image:
-    """Light an RGB image at full 8-bit precision for exports."""
-    lit = image.point(channel_lut(phase).reshape(-1).tolist())
-    if glow is not None:
-        lit = Image.composite(image.point(channel_lut(phase, glow=True).reshape(-1).tolist()), lit, glow)
-    return lit
+def relit_frames(name: str, path: Path, light: tuple[float, bool], limit: int = MAX_FRAMES):
+    """A scene's frames as the display lights them, at full 8-bit precision, with their durations."""
+    glow = read_glow(glow_path(name, path), SCREEN)
+    lamps = None if glow is None else np.asarray(glow) > 127
+    strength = star_strength(light[0])
+    _, frames = read_frames(path, SCREEN, limit)
+    elapsed = 0
+    for index, (image, duration) in enumerate(frames):
+        pixels = np.asarray(image)
+        if index == 0:
+            stars = find_stars(pixels)
+            sky = None if stars is None else pixels.reshape(-1, 3)[stars.index].astype(np.int16)
+        moonlit = name not in PAINTED_AT_NIGHT
+        lit = relight(pixels, *light, moonlit=moonlit)
+        if lamps is not None:
+            lit[lamps] = relight(pixels[lamps], *light, True, moonlit)
+        if stars is not None and strength:
+            clear = (np.abs(pixels.reshape(-1, 3)[stars.index] - sky) <= 16).all(axis=1)
+            flat = lit.reshape(-1, 3)
+            flat[stars.index] = np.maximum(flat[stars.index],
+                                           stars.light(elapsed/1000, strength)*clear[:, None])
+        yield Image.fromarray(np.clip(lit + .5, 0, 255).astype(np.uint8)), duration
+        elapsed += duration
 
 
-def export_still(name: str, path: Path, phase: float, output: Path) -> None:
-    _, frames = read_frames(path, SCREEN, 1)
-    image, _ = next(frames)
-    lit_image(image, phase, read_glow(glow_path(name, path), SCREEN)).save(output)
+def export_still(name: str, path: Path, light: tuple[float, bool], output: Path) -> None:
+    image, _ = next(relit_frames(name, path, light, 1))
+    image.save(output)
 
 
-def export_gif(name: str, path: Path, phase: float, output: Path, width: int = 640) -> None:
+def export_gif(name: str, path: Path, light: tuple[float, bool], output: Path, width: int = 640) -> None:
     """A looping GIF small enough to send in a chat.
 
     Every frame shares one palette and pixels that did not change are
     transparent, so the still parts of the painting are stored once."""
     size = (width, round(width*SCREEN[1]/SCREEN[0]))
-    glow = read_glow(glow_path(name, path), SCREEN)
-    _, frames = read_frames(path, SCREEN)
     dither = (tiled(8, size[::-1]).astype(np.int16) - 32)//4  # -8..7, the same every frame
     smalls, durations = [], []
-    for image, duration in frames:
-        small = np.asarray(lit_image(image, phase, glow).resize(size, Image.Resampling.LANCZOS))
+    for image, duration in relit_frames(name, path, light):
+        small = np.asarray(image.resize(size, Image.Resampling.LANCZOS))
         smalls.append(Image.fromarray(np.clip(small + dither[..., None], 0, 255).astype(np.uint8)))
         durations.append(duration)
     # One palette for the whole loop, from frames spread across it.
@@ -611,10 +676,8 @@ def main() -> None:
     parser.add_argument("--fps", type=float, default=8, help="frames per second (default: 8, as the loops)")
     parser.add_argument("--day-seconds", type=float,
                         help="run a fast day/night cycle of this length instead of following the sun")
-    parser.add_argument("--latitude", type=float, help="for sunrise and sunset (default: the time zone's city)")
-    parser.add_argument("--longitude", type=float)
-    parser.add_argument("--quiet-hours", default="23:00-07:00",
-                        help="switch the display off between these times, or 'off' (default: 23:00-07:00)")
+    parser.add_argument("--night", default="23:00-07:00",
+                        help="night hours; the rest of the day is shown in daylight (default: 23:00-07:00)")
     parser.add_argument("--scene", help="scene to export (default: woodland)")
     parser.add_argument("--at", help="time of day to light an export, HH:MM (default: now)")
     parser.add_argument("--export", type=Path, metavar="FILE", help="write a still (.png, .jpg, .ppm)")
@@ -633,10 +696,8 @@ def main() -> None:
 
     if min(args.fps, args.seconds_per_scene) <= 0 or args.crossfade < 0 or (args.day_seconds or 1) <= 0:
         parser.error("durations and fps must be positive")
-    if (args.latitude is None) != (args.longitude is None):
-        parser.error("give both --latitude and --longitude")
     try:
-        quiet = parse_quiet(args.quiet_hours)
+        night = parse_night(args.night)
         at = clock_minutes(args.at) if args.at else None
     except ValueError as error:
         parser.error(str(error))
@@ -644,26 +705,20 @@ def main() -> None:
     for name in (args.scene, args.start_scene):
         if name and name not in library:
             parser.error(f"unknown scene {name!r}; choose from {', '.join(library)}")
-    if args.latitude is not None:
-        location = (args.latitude, args.longitude)
-    else:
-        # Without tzdata, an equator-like day centred on local noon.
-        offset = dt.datetime.now().astimezone().utcoffset().total_seconds()/3600
-        location = zone_location() or (0.0, 15*offset)
     settings = Settings(args.seconds_per_scene, args.crossfade, args.fps, args.day_seconds,
-                        location, quiet, args.start_scene)
+                        night, args.start_scene)
 
     if args.export or args.export_gif:
         name = args.scene or SCENES[0]
         when = dt.datetime.now().astimezone()
         if at is not None:
             when = when.replace(hour=at//60, minute=at % 60, second=0, microsecond=0)
-        phase = settings.phase(when.timestamp())
+        light = settings.light(when.timestamp())
         if args.export:
-            export_still(name, library[name], phase, args.export)
+            export_still(name, library[name], light, args.export)
             print(f"Wrote {args.export}")
         if args.export_gif:
-            export_gif(name, library[name], phase, args.export_gif, args.gif_width)
+            export_gif(name, library[name], light, args.export_gif, args.gif_width)
             print(f"Wrote {args.export_gif} ({args.export_gif.stat().st_size/1e6:.1f} MB)")
         return
 
