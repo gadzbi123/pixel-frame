@@ -8,10 +8,7 @@ case "${1:-}" in
     exec systemctl "$1" pixel-frame.service
     ;;
   restart)
-    # Stop, then start. A unit installed before the console hand-back was fixed
-    # cancels its own `systemctl restart` and stays off; this works with both.
-    systemctl stop pixel-frame.service
-    exec systemctl start pixel-frame.service
+    exec systemctl restart pixel-frame.service
     ;;
   status)
     exec systemctl --no-pager status pixel-frame.service

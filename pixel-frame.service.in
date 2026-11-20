@@ -13,7 +13,11 @@ EnvironmentFile=-/etc/default/pixel-frame
 # Take the console from its login prompt, and give it back whenever the frame
 # stops. Not Conflicts=getty@tty1.service: giving the console back would then
 # stop the frame, which cancels a restart and the retry after a crash.
-ExecStartPre=-+/usr/bin/systemctl stop getty@tty1.service
+# A login prompt hangs the console up as it starts and stops, which ends whatever
+# holds the console, so the frame starts only once the prompt is gone. The stop
+# ignores the hangup: setsid takes systemctl off the console, and the shell that
+# waits for it ignores it.
+ExecStartPre=-+/bin/sh -c 'trap "" HUP; exec /usr/bin/setsid --wait /usr/bin/systemctl stop getty@tty1.service'
 ExecStart=/usr/bin/python3 @PROJECT_DIR@/pixel_frame.py $PIXEL_FRAME_ARGS
 ExecStopPost=-+/usr/bin/systemctl --no-block start getty@tty1.service
 StandardInput=tty-force
@@ -21,8 +25,12 @@ StandardOutput=journal
 StandardError=journal
 TTYPath=/dev/tty1
 TTYReset=yes
-TTYVHangup=yes
+# No TTYVHangup: hanging the console up ends the login prompt, which then comes
+# straight back (Restart=always) and hangs the frame up.
 Restart=on-failure
+# A hangup still ends the frame if a login prompt is started by hand. systemd
+# counts that as a clean exit, so ask for the restart.
+RestartForceExitStatus=SIGHUP
 RestartSec=3
 TimeoutStopSec=10
 
