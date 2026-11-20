@@ -120,6 +120,16 @@ file joins the playlist all year under its file name, with the same day and
 night lighting. Pictures are scaled to fill the screen. Small pixel art keeps
 its hard edges.
 
+There is no need to restart the frame: it looks in `pictures/` every five
+seconds. A new picture fades in about fifteen seconds after it finishes copying
+and stays for a full slot, and then the playlist carries on. A replaced picture
+or glow mask comes on the same way, and a deleted picture leaves the playlist.
+From another computer:
+
+```bash
+scp lighthouse.png pi@raspberrypi.local:pixel-frame/pictures/
+```
+
 Stars come out by themselves over clear blue sky. To make windows or lamps
 glow at night, add a mask with the same name and a `-glow.png` suffix, white
 where the light is: `pictures/harbour.png` and `pictures/harbour-glow.png`. Trace

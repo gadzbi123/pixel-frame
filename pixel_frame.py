@@ -48,6 +48,7 @@ MEDIA = {".webp", ".gif", ".png", ".jpg", ".jpeg"}
 SCREEN = (1920, 1080)
 SECONDS_PER_SCENE = 720
 MAX_FRAMES = 480  # Longer drop-in animations are sampled to bound memory.
+SCAN_SECONDS = 5  # how often the running frame looks for pictures added, replaced or removed
 
 FBIOGET_VSCREENINFO, FBIOBLANK, FB_BLANK_UNBLANK = 0x4600, 0x4611, 0
 KDSETMODE, KD_TEXT, KD_GRAPHICS = 0x4B3A, 0, 1
@@ -56,21 +57,65 @@ VT_SETMODE, VT_RELDISP, VT_AUTO, VT_PROCESS, VT_ACKACQ = 0x5602, 0x5605, 0, 1, 2
 
 # Scenes and the playlist -------------------------------------------------
 
-def scene_library(scenes_dir: Path = PICTURES) -> dict[str, Path]:
-    """Built-in loops in playlist order, then every other still or animation in scenes_dir."""
-    library = {name: PICTURES / f"{name}.webp" for name in SCENES}
-    if scenes_dir.is_dir():
-        for path in sorted(scenes_dir.iterdir()):
-            if path.suffix.lower() not in MEDIA or path.stem.endswith("-glow"):
+def stamp(path: Path) -> tuple[int, int] | None:
+    """Changes whenever the file is written; None when there is no file."""
+    try:
+        info = path.stat()
+    except OSError:
+        return None
+    return info.st_mtime_ns, info.st_size
+
+
+class Pictures:
+    """The scenes: built-in loops in playlist order, then every other still or animation
+    in the folder. Scanned again while the frame runs, so pictures can be added, replaced
+    or removed without a restart."""
+
+    def __init__(self, folder: Path = PICTURES):
+        self.folder = folder
+        self.library: dict[str, Path] = {}
+        self.versions: dict[str, tuple] = {}  # each scene's file and glow mask, as last shown
+        self._seen: dict[str, tuple] = {}  # as found by the last scan, settled or not
+        self._checked: dict[Path, tuple] = {}  # (stamp, opens) per file, so each version is opened once
+        self.scan(settled=True)
+
+    def scan(self, settled: bool = False) -> list[str]:
+        """Look again; return the scenes added or changed since the last scan, in playlist order.
+
+        Unless settled, a file must stay the same between two scans before it is taken,
+        so a picture still being copied in is not shown half-written."""
+        found = {name: PICTURES / f"{name}.webp" for name in SCENES}
+        if self.folder.is_dir():
+            for path in sorted(self.folder.iterdir()):
+                if path.suffix.lower() in MEDIA and not path.stem.endswith("-glow") and not path.name.startswith("."):
+                    found.setdefault(path.stem, path)
+        seen, library, versions = {}, {}, {}
+        for name, path in found.items():
+            glow = glow_path(name, path)
+            version = seen[name] = (path, stamp(path), stamp(glow))
+            if version[1] is None:
                 continue
+            if settled or self._seen.get(name) == version:
+                if self._opens(path, version[1]) and (version[2] is None or self._opens(glow, version[2])):
+                    library[name], versions[name] = path, version
+            elif self.library.get(name) == path:
+                library[name], versions[name] = path, self.versions[name]  # keep showing it while it changes
+        fresh = [name for name in library if versions[name] != self.versions.get(name)]
+        self.library, self.versions, self._seen = library, versions, seen
+        return fresh
+
+    def _opens(self, path: Path, version: tuple[int, int]) -> bool:
+        checked = self._checked.get(path)
+        if checked is None or checked[0] != version:
             try:
                 with Image.open(path) as media:
                     media.verify()
+                checked = version, True
             except Exception as error:
-                print(f"Skipping {path.name}: {error}", file=sys.stderr)
-                continue
-            library.setdefault(path.stem, path)
-    return library
+                print(f"Skipping {path.name}: {error}", file=sys.stderr, flush=True)
+                checked = version, False
+            self._checked[path] = checked
+        return checked[1]
 
 
 def glow_path(name: str, path: Path) -> Path:
@@ -90,6 +135,56 @@ def scene_at(names, when: float, seconds_per_scene: float) -> tuple[str, float]:
     month = time.localtime(slot*seconds_per_scene).tm_mon
     shown = playlist(names, month)
     return shown[int(slot) % len(shown)], seconds_per_scene - elapsed
+
+
+class Programme:
+    """Which scene is on: the clock's playlist, apart from scenes held out of turn.
+
+    Held are the scene asked for at start, new or changed pictures, each for a full
+    slot, and the scene on screen when the playlist changes, to the end of its slot."""
+
+    def __init__(self, names, seconds_per_scene: float, start_scene: str | None = None, now: float = 0.):
+        self.names, self.seconds = list(names), seconds_per_scene
+        self.held = [start_scene] if start_scene else []
+        self.until = now + seconds_per_scene  # when held[0] gives way
+        self.soon = False  # held[1] is a new picture, to show as soon as it is ready
+
+    def at(self, now: float) -> tuple[str, str, float]:
+        """(current scene, upcoming scene, seconds until the change)."""
+        while self.held and now >= self.until:
+            self.held.pop(0)
+            self.until, self.soon = self.until + self.seconds, False
+        if not self.held:
+            current, remaining = scene_at(self.names, now, self.seconds)
+            return current, scene_at(self.names, now + remaining + .001, self.seconds)[0], remaining
+        upcoming = self.held[1] if len(self.held) > 1 else scene_at(self.names, self.until + .001, self.seconds)[0]
+        return self.held[0], upcoming, self.until - now
+
+    def _hold_current(self, now: float) -> None:
+        if not self.held:
+            current, _, remaining = self.at(now)
+            self.held, self.until = [current], now + remaining
+
+    def replace(self, names, now: float) -> None:
+        """A changed playlist. The scene on screen stays to the end of its slot, unless it was removed."""
+        self._hold_current(now)
+        held = [name for name in self.held if name in names]
+        if held[:1] != self.held[:1]:
+            self.until = now + self.seconds
+        self.held, self.names = held, list(names)
+        self.soon = self.soon and len(held) > 1
+
+    def show_next(self, names, now: float) -> None:
+        """Hold these scenes next, after any already waiting."""
+        self._hold_current(now)
+        waiting = len(self.held)
+        self.held += [name for name in names if name not in self.held]
+        self.soon = self.soon or (waiting == 1 and len(self.held) > 1)
+
+    def hurry(self, now: float, lead: float) -> None:
+        """The upcoming scene is ready: if it is a new picture, change to it within lead seconds."""
+        if self.soon:
+            self.until, self.soon = min(self.until, now + lead), False
 
 
 # Night hours -------------------------------------------------------------
@@ -730,48 +825,59 @@ def decode_loop(name: str, path: Path, size: tuple[int, int], limit: int = MAX_F
 
 
 class LoopCache:
-    """Decoded loops for the scenes on screen now and next, filled in the background."""
+    """Decoded loops for the scenes on screen now and next, filled in the background.
 
-    def __init__(self, library: dict[str, Path], size: tuple[int, int]):
-        self.library, self.size = library, size
-        self.loops: dict[str, Loop] = {}
-        self.previews: dict[str, Loop] = {}
-        self.loading: set[str] = set()
+    Loops are kept per version of a scene's files, so a replaced picture decodes afresh."""
+
+    def __init__(self, pictures: Pictures, size: tuple[int, int]):
+        self.pictures, self.size = pictures, size
+        self.loops: dict[tuple, Loop] = {}
+        self.previews: dict[tuple, Loop] = {}
+        self.loading: set[tuple] = set()
         self.lock = threading.Lock()
+
+    def _key(self, name: str) -> tuple:
+        return name, self.pictures.versions.get(name)
+
+    def decoded(self, name: str) -> bool:
+        return self._key(name) in self.loops
 
     def ready(self, name: str) -> Loop | None:
         """The decoded loop, or None after starting to decode it."""
+        key = self._key(name)
         with self.lock:
-            loop = self.loops.get(name)
-            if loop is None and name not in self.loading:
-                self.loading.add(name)
-                threading.Thread(target=self._decode, args=(name,), daemon=True).start()
+            loop = self.loops.get(key)
+            if loop is None and key not in self.loading:
+                self.loading.add(key)
+                threading.Thread(target=self._decode, args=(key, self.pictures.library[name]), daemon=True).start()
         return loop
 
     def get(self, name: str) -> Loop:
         """Something to show now: the loop, or its first frame while it decodes."""
         loop = self.ready(name)
         if loop is None:
-            loop = self.previews.get(name)
+            key = self._key(name)
+            loop = self.previews.get(key)
             if loop is None:
-                loop = self.previews[name] = decode_loop(name, self.library[name], self.size, 1)
+                loop = self.previews[key] = decode_loop(name, self.pictures.library[name], self.size, 1)
         return loop
 
     def keep(self, names: set[str]) -> None:
+        keys = {self._key(name) for name in names}
         with self.lock:
             for cache in (self.loops, self.previews):
-                for name in set(cache) - names:
-                    del cache[name]
+                for key in set(cache) - keys:
+                    del cache[key]
 
-    def _decode(self, name: str) -> None:
+    def _decode(self, key: tuple, path: Path) -> None:
         try:
-            loop = decode_loop(name, self.library[name], self.size)
+            loop = decode_loop(key[0], path, self.size)
         except Exception as error:  # A broken drop-in file must not stop the frame.
-            print(f"Cannot decode {name}: {error}", file=sys.stderr, flush=True)
+            print(f"Cannot decode {key[0]}: {error}", file=sys.stderr, flush=True)
             loop = Loop(np.zeros((1, self.size[1], self.size[0]), np.uint16), [1000])
         with self.lock:
-            self.loops[name] = loop
-            self.loading.discard(name)
+            self.loops[key] = loop
+            self.loading.discard(key)
 
 
 # Display -----------------------------------------------------------------
@@ -919,17 +1025,7 @@ class Settings:
         return round(max(-TWILIGHT, min(TWILIGHT, elevation))*8)/8, rising and abs(elevation) < TWILIGHT
 
 
-def schedule(names, settings: Settings, started: float, now: float):
-    """(current scene, upcoming scene, seconds until the change)."""
-    if settings.start_scene and now < started + settings.seconds_per_scene:
-        current, remaining = settings.start_scene, started + settings.seconds_per_scene - now
-    else:
-        current, remaining = scene_at(names, now, settings.seconds_per_scene)
-    upcoming, _ = scene_at(names, now + remaining + .001, settings.seconds_per_scene)
-    return current, upcoming, remaining
-
-
-def run(device: str, library: dict[str, Path], settings: Settings) -> None:
+def run(device: str, pictures: Pictures, settings: Settings) -> None:
     running = True
 
     def stop(_signal, _frame):
@@ -941,10 +1037,11 @@ def run(device: str, library: dict[str, Path], settings: Settings) -> None:
     fb = Framebuffer(device)
     console = Console()
     try:
-        cache = LoopCache(library, (fb.width, fb.height))
+        cache = LoopCache(pictures, (fb.width, fb.height))
         sky = Sky(settings.place, PRESETS.get(settings.weather))
         falling = Precipitation(fb.width, fb.height)
-        names, started, shown = list(library), time.time(), None
+        programme = Programme(pictures.library, settings.seconds_per_scene, settings.start_scene, time.time())
+        shown, scanned = None, time.monotonic()
         drawn = None  # (loop, frame, light) on the screen; None when the next tick must draw
         while running:
             tick = time.monotonic()
@@ -953,7 +1050,18 @@ def run(device: str, library: dict[str, Path], settings: Settings) -> None:
                 drawn = None  # the other console draws over the picture
                 time.sleep(.2)
                 continue
-            current, upcoming, remaining = schedule(names, settings, started, now)
+            if tick - scanned >= SCAN_SECONDS:
+                scanned, before = tick, set(pictures.library)
+                fresh = pictures.scan()
+                for name in sorted(before - set(pictures.library)):
+                    print(f"{time.strftime('%H:%M')} removed {name}", flush=True)
+                for name in fresh:
+                    print(f"{time.strftime('%H:%M')} {'new' if name not in before else 'changed'} {name}", flush=True)
+                if list(pictures.library) != programme.names:
+                    programme.replace(pictures.library, now)
+                if fresh:
+                    programme.show_next(fresh, now)
+            current, upcoming, remaining = programme.at(now)
             if current != shown:
                 print(f"{time.strftime('%H:%M')} {current}", flush=True)
                 shown = current
@@ -962,7 +1070,9 @@ def run(device: str, library: dict[str, Path], settings: Settings) -> None:
             light = Light(*settings.light(now), moonshine(moon), step(weather.cloud), step(weather.fog))
             loop = cache.get(current)
             # Decode the next scene once the current one is ready, not alongside it.
-            nearby = cache.ready(upcoming) if current in cache.loops else None
+            nearby = cache.ready(upcoming) if cache.decoded(current) else None
+            if nearby is not None:
+                programme.hurry(now, settings.crossfade)
             fading = remaining < settings.crossfade and upcoming != current and nearby is not None
             flash = lightning(tick) if weather.storm else 0.
             pouring = bool(weather.rain or weather.snow) and loop.weather
@@ -1091,7 +1201,8 @@ def main() -> None:
         place = parse_place(args.location) if args.location else None
     except ValueError as error:
         parser.error(str(error))
-    library = scene_library(args.scenes_dir)
+    pictures = Pictures(args.scenes_dir)
+    library = pictures.library
     for name in (args.scene, args.start_scene):
         if name and name not in library:
             parser.error(f"unknown scene {name!r}; choose from {', '.join(library)}")
@@ -1112,7 +1223,7 @@ def main() -> None:
             print(f"Wrote {args.export_gif} ({args.export_gif.stat().st_size/1e6:.1f} MB)")
         return
 
-    run(args.device, library, settings)
+    run(args.device, pictures, settings)
 
 
 if __name__ == "__main__":

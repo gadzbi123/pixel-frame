@@ -1,3 +1,5 @@
+import copy
+import os
 import tempfile
 import time
 import unittest
@@ -236,20 +238,61 @@ class PlaylistTests(unittest.TestCase):
         self.assertEqual(pf.scene_at(pf.SCENES, start+100, 720), (seen[0][0], 620))
 
     def test_upcoming_scene_is_the_one_shown_next(self):
-        settings = pf.Settings(seconds_per_scene=720)
         for moment in ((2026, 11, 30, 23, 55), (2026, 12, 31, 23, 50), (2026, 7, 15, 9, 7)):
             now = time.mktime(moment + (0, 0, 0, -1))
-            for offset in range(0, 3600, 97):
-                _, upcoming, remaining = pf.schedule(pf.SCENES, settings, now, now+offset)
-                after = pf.schedule(pf.SCENES, settings, now, now+offset+remaining+.01)[0]
-                self.assertEqual(after, upcoming)
+            for start_scene, new in ((None, []), ("christmas", []), (None, ["pond", "woodland"])):
+                programme = pf.Programme(pf.SCENES, 720, start_scene, now)
+                programme.show_next(new, now)
+                programme.hurry(now + 5, 3)
+                for offset in range(0, 3600, 97):
+                    _, upcoming, remaining = programme.at(now+offset)
+                    after = copy.deepcopy(programme).at(now+offset+remaining+.01)[0]
+                    self.assertEqual(after, upcoming)
 
     def test_start_scene_shows_first_then_the_clock(self):
-        settings = pf.Settings(seconds_per_scene=720, start_scene="christmas")
         now = time.mktime((2026, 7, 15, 12, 5, 0, 0, 0, -1))
-        current, upcoming, remaining = pf.schedule(pf.SCENES, settings, now, now)
+        programme = pf.Programme(pf.SCENES, 720, "christmas", now)
+        current, upcoming, remaining = programme.at(now)
         self.assertEqual((current, remaining), ("christmas", 720))
-        self.assertEqual(pf.schedule(pf.SCENES, settings, now, now+721)[0], upcoming)
+        self.assertEqual(programme.at(now+721)[0], upcoming)
+
+
+class ProgrammeTests(unittest.TestCase):
+    NOW = time.mktime((2026, 7, 15, 12, 5, 0, 0, 0, -1))
+
+    def test_a_new_picture_comes_on_once_ready_for_a_full_slot(self):
+        programme = pf.Programme(pf.SCENES, 720, now=self.NOW)
+        clock, _, remaining = programme.at(self.NOW)
+        programme.show_next(["harbour"], self.NOW)
+        self.assertEqual(programme.at(self.NOW+1), (clock, "harbour", remaining-1))  # still decoding
+        programme.hurry(self.NOW+2, 3)
+        self.assertEqual(programme.at(self.NOW+2)[1:], ("harbour", 3))
+        self.assertEqual(programme.at(self.NOW+5.5)[::2], ("harbour", 719.5))
+        self.assertEqual(programme.at(self.NOW+726), pf.Programme(pf.SCENES, 720).at(self.NOW+726))
+
+    def test_new_pictures_wait_their_turn_behind_each_other(self):
+        programme = pf.Programme(pf.SCENES, 720, now=self.NOW)
+        programme.show_next(["harbour"], self.NOW)
+        programme.hurry(self.NOW, 3)
+        programme.show_next(["desert", "harbour"], self.NOW+60)
+        programme.hurry(self.NOW+60, 3)  # desert is decoded, but harbour has just come on
+        clock = pf.Programme(pf.SCENES, 720).at(self.NOW+1450)[0]
+        self.assertEqual([programme.at(self.NOW+t)[0] for t in (60, 722, 1400, 1450)],
+                         ["harbour", "harbour", "desert", clock])
+
+    def test_a_changed_playlist_keeps_the_scene_on_screen_to_the_end_of_its_slot(self):
+        programme = pf.Programme(pf.SCENES, 720, now=self.NOW)
+        current, _, remaining = programme.at(self.NOW)
+        fewer = [name for name in pf.SCENES if name not in (current, "pond")] + [current]
+        programme.replace(fewer, self.NOW+1)
+        self.assertEqual(programme.at(self.NOW+1)[::2], (current, remaining-1))
+        later = self.NOW + remaining + 1
+        self.assertEqual(programme.at(later), pf.Programme(fewer, 720).at(later))
+
+    def test_a_removed_scene_goes_at_once(self):
+        programme = pf.Programme(pf.SCENES, 720, "christmas", self.NOW)
+        programme.replace([name for name in pf.SCENES if name != "christmas"], self.NOW+1)
+        self.assertNotEqual(programme.at(self.NOW+1)[0], "christmas")
 
 
 
@@ -283,6 +326,13 @@ def tiny_animation(path, colors=((200, 40, 40), (40, 200, 40), (40, 40, 200)), d
     frames[0].save(path, save_all=True, append_images=frames[1:], duration=list(durations), loop=0)
 
 
+def save_png(path, color, when=1, mode="RGB"):
+    """A small PNG with a set modification time, so a rewrite always looks changed."""
+    Image.new(mode, (64, 36), color).save(path)
+    os.utime(path, ns=(when*10**9, when*10**9))
+    return path.read_bytes()
+
+
 class DropInTests(unittest.TestCase):
     def test_gifs_and_stills_in_the_scenes_folder_join_the_playlist(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -293,7 +343,7 @@ class DropInTests(unittest.TestCase):
             mask.paste(255, (0, 0, 8, 4))
             mask.save(folder/"still-glow.png")
             (folder/"broken.gif").write_bytes(b"not a gif")
-            library = pf.scene_library(folder)
+            library = pf.Pictures(folder).library
             self.assertEqual(list(library)[:10], list(pf.SCENES))
             self.assertEqual(list(library)[10:], ["still", "tiny"])
 
@@ -307,6 +357,41 @@ class DropInTests(unittest.TestCase):
 
             still = pf.decode_loop("still", library["still"], (64, 36))
             self.assertEqual(len(still.glow), 8*4)
+
+    def test_pictures_join_change_and_leave_while_the_frame_runs(self):
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            pictures = pf.Pictures(folder)
+            path = folder/"harbour.png"
+            whole = save_png(path, (90, 90, 90))
+            path.write_bytes(whole[:len(whole)//2])  # still being copied in
+            self.assertEqual((pictures.scan(), pictures.scan()), ([], []))
+            self.assertNotIn("harbour", pictures.library)
+            path.write_bytes(whole)
+            self.assertEqual((pictures.scan(), pictures.scan()), ([], ["harbour"]))
+            self.assertEqual(pictures.scan(), [])
+
+            save_png(path, (10, 120, 200), when=2)
+            self.assertEqual(pictures.scan(), [])  # the old version shows until the copy settles
+            self.assertIn("harbour", pictures.library)
+            self.assertEqual(pictures.scan(), ["harbour"])
+            save_png(folder/"harbour-glow.png", 255, mode="L")
+            self.assertEqual((pictures.scan(), pictures.scan()), ([], ["harbour"]))
+
+            path.unlink()
+            self.assertEqual(pictures.scan(), [])
+            self.assertNotIn("harbour", pictures.library)
+
+    def test_a_replaced_picture_is_decoded_afresh(self):
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            save_png(folder/"harbour.png", (200, 0, 0))
+            pictures = pf.Pictures(folder)
+            cache = pf.LoopCache(pictures, (64, 36))
+            self.assertEqual(unpack(int(cache.get("harbour").frames[0, 0, 0])), (206, 0, 0))
+            save_png(folder/"harbour.png", (0, 0, 200), when=2)
+            pictures.scan(), pictures.scan()
+            self.assertEqual(unpack(int(cache.get("harbour").frames[0, 0, 0])), (0, 0, 206))
 
     def test_gif_export_round_trip(self):
         with tempfile.TemporaryDirectory() as folder:
