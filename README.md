@@ -56,11 +56,41 @@ runs a fast two-minute day instead, for demos.
 
 **Night.** After dark the painting is relit as moonlight. The sky goes deep
 blue and stars come out and twinkle, clouds and snow turn silver, and colours
-fade. A sun in the painting becomes the moon. The Christmas scene is painted
-at night already and keeps its own light.
+fade. A sun in the painting fades to a soft glow. The Christmas scene is
+painted at night already and keeps its own light.
 
 **Lights at night.** Cabin windows, lanterns, the village, the tree lights and
 lava keep glowing warm after dark.
+
+**The real moon and weather.** Tell the frame where it is, and the night and
+the weather follow the sky outside:
+
+```bash
+PIXEL_FRAME_ARGS="--location 52.23,21.01"   # latitude,longitude, in /etc/default/pixel-frame
+```
+
+- The moon rises in tonight's phase, from a thin crescent with faint
+  earthshine to full, lit on the side facing the sun. It stands as high as the
+  real moon and moves across the sky through the night: every painting is taken
+  to face south, so it rises on the left and sets on the right. If a cloud,
+  peak or tree in the painting stands in the way, it shows in the nearest clear
+  sky. Scenes with little clear sky show no moon.
+- A moonless night is darker, with brighter stars. A full moon lights the
+  night more and washes out the faintest stars.
+- Rain and snow fall over the picture, slanting with the wind. Grey cloud
+  flattens the daylight and hides the moon and stars, fog veils the picture
+  (lamps glow through it), and a thunderstorm brings lightning. Weather comes
+  on and clears over a minute or two.
+- Winter, Christmas, Tornado, Tsunami and Reef keep the weather they are
+  painted with.
+
+The weather comes from [Open-Meteo](https://open-meteo.com), which is free and
+needs no account. The frame asks for the current weather every 15 minutes and
+sends nothing but the location, rounded to about a kilometre. Without a
+network it keeps the last report for three hours, then shows clear sky.
+`pixel-frame logs` shows each change, such as `21:30 weather: rain 65%, cloud 100%`.
+To see an effect now, run it in the foreground with
+`--weather rain` (or `clear`, `cloudy`, `fog`, `drizzle`, `snow`, `storm`).
 
 **Seasons.** Each scene shows for 12 minutes, then crossfades to the next.
 Seasonal scenes join the playlist in their months; the rest play all year.

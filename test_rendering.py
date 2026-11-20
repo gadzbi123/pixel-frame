@@ -27,7 +27,7 @@ class LightingTests(unittest.TestCase):
     def test_light_changes_gradually_from_day_to_night(self):
         grid = np.stack(np.meshgrid(*[np.arange(0, 256, 51)]*3), -1).reshape(-1, 3)
         for rising in (False, True):
-            steps = [pf.relight(grid, eighths/8, rising) for eighths in range(96, -97, -1)]
+            steps = [pf.relight(grid, (eighths/8, rising)) for eighths in range(96, -97, -1)]
             for first, second in zip(steps, steps[1:]):
                 self.assertLessEqual(np.abs(first-second).max(), 6)
 
@@ -35,7 +35,7 @@ class LightingTests(unittest.TestCase):
         for light in (DAY, (0.0, False), (-4.0, True), NIGHT):
             tables = pf.lut565(light)
             for code in (0xFFFF, 0x8410, 0x1D5D, 0xF800, 0x07E0, 0x39E7):
-                exact = np.clip(pf.relight(np.array(unpack(code)), *light), 0, 255)*np.array([31, 63, 31])/255
+                exact = np.clip(pf.relight(np.array(unpack(code)), light), 0, 255)*np.array([31, 63, 31])/255
                 for table in tables:
                     lit = int(table[code])
                     for field, level in zip((lit >> 11, lit >> 5 & 63, lit & 31), exact):
@@ -44,7 +44,7 @@ class LightingTests(unittest.TestCase):
     def test_dither_cells_average_out_the_coarse_night_levels(self):
         tables = pf.lut565(NIGHT)
         for code in (0x1D5D, 0x8410, 0x5AFF):
-            exact = np.clip(pf.relight(np.array(unpack(code)), *NIGHT), 0, 255)[2]*31/255
+            exact = np.clip(pf.relight(np.array(unpack(code)), NIGHT), 0, 255)[2]*31/255
             self.assertLess(abs(np.mean([int(table[code]) & 31 for table in tables]) - exact), .26)
 
     def test_by_day_the_painting_is_shown_as_painted(self):
@@ -52,7 +52,7 @@ class LightingTests(unittest.TestCase):
             self.assertEqual({int(table[code]) for table in pf.lut565(DAY)}, {code})
 
     def test_night_is_dark_and_blue_with_the_sky_darker_than_the_clouds(self):
-        sky, cloud, grass = (pf.relight(np.array(colour), *NIGHT)
+        sky, cloud, grass = (pf.relight(np.array(colour), NIGHT)
                              for colour in ((70, 140, 230), (240, 240, 245), (120, 180, 60)))
         self.assertLess(sky.sum(), 130)
         self.assertLess(sky.sum(), cloud.sum()/2)
@@ -70,17 +70,37 @@ class LightingTests(unittest.TestCase):
         np.testing.assert_array_equal(christmas.lit(0, NIGHT), christmas.lit(0, DAY))
         self.assertFalse((meadow.lit(0, NIGHT) == meadow.lit(0, DAY)).any())
 
+    def test_skipping_the_lighting_never_changes_what_is_shown(self):
+        skipped = []
+        for elevation in np.arange(-12, 12.125, .125):
+            for light in ((float(elevation), False), (float(elevation), True)):
+                for moonlit in (True, False):
+                    if pf.as_painted(light, moonlit):
+                        skipped.append((light, moonlit))
+                        for glow in (False, True):
+                            for table in pf.lut565(light, glow, moonlit):
+                                np.testing.assert_array_equal(table, np.arange(65536))
+        self.assertIn((DAY, True), skipped)
+        self.assertIn((NIGHT, False), skipped)  # a scene painted at night
+        self.assertNotIn((NIGHT, True), skipped)
+
+    def test_by_day_frames_go_to_the_screen_without_per_pixel_work(self):
+        frames = np.arange(2*36*64, dtype=np.uint16).reshape(2, 36, 64)
+        loop = pf.Loop(frames, [500, 1000], np.array([0, 5]))
+        self.assertTrue(np.shares_memory(loop.lit(.6, DAY), frames[1]))
+        self.assertFalse(np.shares_memory(loop.lit(.6, NIGHT), frames))
+
     def test_low_sun_warms_the_picture(self):
         grey = np.array((180, 180, 180))
         for rising in (True, False):
-            red, green, blue = pf.relight(grey, 1.0, rising)
+            red, green, blue = pf.relight(grey, (1.0, rising))
             self.assertGreater(red, green + 15)
             self.assertGreater(green, blue + 15)
-        self.assertGreater(pf.relight(grey, 1.0, True)[2], pf.relight(grey, 1.0, False)[2])  # dawn is the cooler
+        self.assertGreater(pf.relight(grey, (1.0, True))[2], pf.relight(grey, (1.0, False))[2])  # dawn is the cooler
 
     def test_dusk_darkens_step_by_step_without_a_jump(self):
         for colour in ((120, 160, 90), (70, 140, 230)):   # grass, sky
-            levels = [pf.relight(np.array(colour), float(elevation), False).sum() for elevation in range(0, -13, -2)]
+            levels = [pf.relight(np.array(colour), (float(elevation), False)).sum() for elevation in range(0, -13, -2)]
             for before, after in zip(levels, levels[1:]):
                 self.assertLess(after, before*.99)
                 self.assertGreater(after, before*.8)
@@ -170,7 +190,7 @@ class NightHoursTests(unittest.TestCase):
         dawn = light(local(6, 50))
         self.assertTrue(dawn[1])
         self.assertTrue(0 < pf.night_amount(dawn[0]) < 1)
-        self.assertEqual(pf.star_strength(light(local(23, 1))[0]), 0)
+        self.assertEqual(pf.star_strength(light(local(23, 1))), 0)
 
     def test_light_moves_in_small_steps_through_dusk(self):
         light = pf.Settings().light
@@ -248,6 +268,11 @@ class FrameTests(unittest.TestCase):
             counts.append(int(image.sum()))
         self.assertEqual(counts, [0, 1024, 2048, 3072, 4096])
 
+    def test_dissolve_leaves_the_decoded_frames_alone(self):
+        current, upcoming = np.zeros((64, 64), np.uint16), np.ones((64, 64), np.uint16)
+        pf.dissolve(current, upcoming, .5)
+        self.assertEqual((int(current.sum()), int(upcoming.sum())), (0, 4096))
+
     def test_fit_covers_the_screen(self):
         for size in ((100, 100), (4000, 1000), (40, 30)):
             self.assertEqual(pf.fit(Image.new("RGB", size), (192, 108)).size, (192, 108))
@@ -296,6 +321,106 @@ class DropInTests(unittest.TestCase):
                     gif.seek(index)
                     frame = np.asarray(gif.convert("RGB")).astype(int)
                     self.assertLess(np.abs(frame-expected).mean(), 10, index)
+
+
+def colour565(rgb):
+    return int(pf.to565(np.array(rgb, np.float32)))
+
+
+class WeatherTests(unittest.TestCase):
+    SKY, MEADOW = (70, 140, 230), (120, 180, 60)
+
+    def test_cloud_greys_and_darkens_the_day(self):
+        clear, grey = (pf.relight(np.array(self.MEADOW), pf.Light(12., False, 1, cloud)) for cloud in (0, 1))
+        self.assertLess(grey.sum(), clear.sum())
+        self.assertLess(np.ptp(grey), np.ptp(clear))
+        self.assertFalse(pf.as_painted(pf.Light(12., False, 1, .5)))
+
+    def test_under_cloud_a_blue_sky_turns_grey_and_flowers_keep_some_colour(self):
+        cloudy = pf.Light(12., False, 1, 1.)
+        sky, poppy = (pf.relight(np.array(colour), cloudy) for colour in (self.SKY, (220, 40, 30)))
+        self.assertLess(np.ptp(sky), .3*np.ptp(self.SKY))
+        self.assertGreater(np.ptp(poppy), .5*190)
+        self.assertGreater(sky.mean(), 120)  # a pale sky, not a dark one
+
+    def test_fog_veils_the_day_and_lifts_the_night(self):
+        clear = pf.relight(np.array(self.MEADOW), DAY)
+        foggy = pf.relight(np.array(self.MEADOW), pf.Light(*DAY, 1, 0, 1))
+        self.assertLess(np.ptp(foggy), np.ptp(clear))  # greyer
+        night_black = pf.relight(np.zeros(3), NIGHT).sum()
+        self.assertGreater(pf.relight(np.zeros(3), pf.Light(*NIGHT, 1, 0, 1)).sum(), night_black + 30)
+
+    def test_a_moonless_night_is_darker_with_brighter_stars(self):
+        moonless, full = pf.Light(*NIGHT, 0), pf.Light(*NIGHT, 1)
+        self.assertLess(pf.relight(np.array(self.SKY), moonless).sum(), .8*pf.relight(np.array(self.SKY), full).sum())
+        self.assertGreater(pf.star_strength(moonless), pf.star_strength(full))
+        self.assertEqual(pf.star_strength(pf.Light(*NIGHT, 1, 1.)), 0)  # overcast
+
+    def test_lamps_glow_through_cloud(self):
+        warm = colour565((230, 150, 60))
+        lamps = brightness(pf.lut565(pf.Light(*NIGHT, 0, 1.), glow=True)[0][warm])
+        self.assertGreaterEqual(lamps, brightness(pf.lut565(DAY)[0][warm]))
+
+    def test_a_scene_with_its_own_weather_keeps_it(self):
+        frames = np.full((1, 36, 64), colour565(self.MEADOW), np.uint16)
+        own, open_ = pf.Loop(frames, [1000], weather=False), pf.Loop(frames, [1000])
+        cloudy = pf.Light(12., False, 1, 1.)
+        np.testing.assert_array_equal(own.lit(0, cloudy), frames[0])
+        self.assertFalse((open_.lit(0, cloudy) == frames[0]).all())
+
+    def test_rain_and_snow_fall_over_the_picture_and_lighten_it(self):
+        black = np.zeros((108, 192), np.uint16)
+        drops = pf.Precipitation(192, 108)
+        for weather in (pf.Weather(rain=1, wind=.5), pf.Weather(snow=1)):
+            first, later = (drops.draw(black, seconds, weather, pf.Light(*DAY)) for seconds in (0, .125))
+            self.assertGreater((first > 0).mean(), .01)
+            self.assertFalse((first == later).all())  # it moves
+            self.assertFalse(black.any())             # the decoded frame is left alone
+
+    def test_lightning_flickers_now_and_then(self):
+        flashes = [pf.lightning(tick/8) for tick in range(8*120)]
+        self.assertTrue(.005 < np.mean(np.array(flashes) > 0) < .1)
+        self.assertEqual(max(flashes), 1)
+
+
+class MoonTests(unittest.TestCase):
+    def moon(self, altitude, azimuth=180, phase=0, bright_side=90):
+        return pf.Moon(altitude, azimuth, phase, bright_side, True)
+
+    def test_the_moon_stands_as_high_in_the_sky_as_it_really_is(self):
+        sky = np.zeros((1080, 1920), bool)
+        sky[:500] = True
+        high, low = pf.moon_spot(sky, self.moon(50)), pf.moon_spot(sky, self.moon(5))
+        self.assertLess(high[1], low[1])
+        self.assertEqual(high[0], 960)  # due south, in the middle
+        self.assertLess(pf.moon_spot(sky, self.moon(30, azimuth=120))[0], 960)  # east, on the left
+        self.assertIsNone(pf.moon_spot(sky, self.moon(-3)))
+        sky[50:400, 860:1060] = False  # a cloud in the way: the moon shows beside it
+        x, y = pf.moon_spot(sky, self.moon(40))
+        self.assertTrue(x < 860 - pf.MOON_RADIUS or x > 1060 + pf.MOON_RADIUS or y > 400 + pf.MOON_RADIUS)
+        self.assertLess(abs(x - 960), 1920//8 + 1)
+        sky[:] = False
+        sky[:200, :300] = True  # sky only far off to the east
+        self.assertIsNone(pf.moon_spot(sky, self.moon(40)))
+
+    def test_its_lit_side_faces_the_sun(self):
+        image = np.zeros((200, 200), np.uint16)
+        pf.draw_moon(image, (100, 100), self.moon(30, phase=90, bright_side=90), 1)
+        disc = pf._RGB8[image].sum(axis=2)
+        right, left = disc[85:115, 102:120].mean(), disc[85:115, 80:98].mean()
+        self.assertGreater(right, 4*left)
+        self.assertGreater(left, 0)  # earthshine
+
+    def test_the_moon_shows_on_a_clear_night_only(self):
+        frames = np.full((1, 1080, 1920), colour565(WeatherTests.SKY), np.uint16)
+        sky = np.zeros((1080, 1920), bool)
+        sky[:500] = True
+        loop = pf.Loop(frames, [1000], sky=sky)
+        moon = self.moon(40)
+        plain = loop.lit(0, NIGHT)
+        self.assertFalse((loop.lit(0, NIGHT, moon) == plain).all())
+        np.testing.assert_array_equal(loop.lit(0, pf.Light(*NIGHT, 1, 1.), moon), loop.lit(0, pf.Light(*NIGHT, 1, 1.)))
+        np.testing.assert_array_equal(loop.lit(0, DAY, moon), frames[0])
 
 
 class TerminalTests(unittest.TestCase):
